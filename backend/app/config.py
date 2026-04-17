@@ -41,6 +41,12 @@ class Settings(BaseSettings):
     # E.g. https://example.com/path/{response_id} for SurveyMonkey response deep links
     survey_monkey_response_url_template: str = ""
 
+    # SendGrid Email Configuration
+    # Key expires 2026-07-03 — raise renewal incident 2 weeks prior
+    sendgrid_api_key: str = ""
+    sendgrid_from_email: str = "do-not-reply-iona@ifs.com"
+    sendgrid_from_name: str = "Iona CSM"
+
     @property
     def is_development(self) -> bool:
         return self.environment == "development"

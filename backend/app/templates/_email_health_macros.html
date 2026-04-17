@@ -1,0 +1,52 @@
+{#
+  _email_health_macros.html
+  Shared health-state helpers for all Iona CSM email templates.
+
+  Usage:
+    {% from '_email_health_macros.html' import health_badge, health_color,
+                                                 health_tint, health_border %}
+
+  health_badge(category)  — full <span> badge with inline styles + classes
+  health_color(category)  — saturated hex color (for score numbers, bars)
+  health_tint(category)   — very-light hex background (for card/row tints)
+  health_border(category) — solid hex for borders / left stripes
+#}
+
+{#-- Saturated foreground / strong color --#}
+{% macro health_color(category) -%}
+  {%- if category == 'Good' %}#10b981
+  {%- elif category == 'At Risk' %}#d97706
+  {%- else %}#dc2626
+  {%- endif -%}
+{% endmacro %}
+
+{#-- Very light pastel fill for card/row backgrounds --#}
+{% macro health_tint(category) -%}
+  {%- if category == 'Good' %}#ecfdf5
+  {%- elif category == 'At Risk' %}#fffbeb
+  {%- else %}#fef2f2
+  {%- endif -%}
+{% endmacro %}
+
+{#-- Slightly darker tint for border/stripe use --#}
+{% macro health_border(category) -%}
+  {%- if category == 'Good' %}#34d399
+  {%- elif category == 'At Risk' %}#fbbf24
+  {%- else %}#f87171
+  {%- endif -%}
+{% endmacro %}
+
+{#-- Full badge <span> — keeps CSS classes + fully inlined styles so badge color
+     survives when email clients strip <style> blocks (Outlook, dark-mode Gmail). --#}
+{% macro health_badge(category) -%}
+  {%- if category == 'Good' -%}
+    <span class="badge badge-good"
+          style="display:inline-block; padding:3px 10px; border-radius:12px; font-size:12px; font-weight:600; text-transform:uppercase; letter-spacing:0.4px; background-color:#d1fae5; color:#065f46; border:1px solid #6ee7b7;">{{ category }}</span>
+  {%- elif category == 'At Risk' -%}
+    <span class="badge badge-at-risk"
+          style="display:inline-block; padding:3px 10px; border-radius:12px; font-size:12px; font-weight:600; text-transform:uppercase; letter-spacing:0.4px; background-color:#fef3c7; color:#92400e; border:1px solid #fcd34d;">{{ category }}</span>
+  {%- else -%}
+    <span class="badge badge-critical"
+          style="display:inline-block; padding:3px 10px; border-radius:12px; font-size:12px; font-weight:600; text-transform:uppercase; letter-spacing:0.4px; background-color:#fee2e2; color:#991b1b; border:1px solid #fca5a5;">{{ category }}</span>
+  {%- endif -%}
+{% endmacro %}

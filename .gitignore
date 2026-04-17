@@ -5,6 +5,13 @@ __pycache__/
 .venv/
 venv/
 *.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+coverage.xml
+*.cover
 
 # Node
 node_modules/
@@ -19,6 +26,10 @@ node_modules/
 .vscode/
 *.swp
 *.swo
+
+# Cursor / local agent (keep committed project rules under .cursor/rules if you use them)
+.cursor/plans/
+.cursor/**/agent-transcripts/
 
 # OS
 .DS_Store

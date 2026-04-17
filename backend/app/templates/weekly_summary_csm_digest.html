@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% from '_email_health_macros.html' import health_badge, health_color, health_tint, health_border %}
+
+{% block title %}Weekly Portfolio Digest — {{ csm_name }}{% endblock %}
+
+{% block content %}
+<!-- Title -->
+<p class="content-title">Weekly Portfolio Digest</p>
+<p class="content-subtitle">
+  {{ week_start }} – {{ week_end }}
+  &nbsp;·&nbsp; {{ accounts | length }} account{{ 's' if accounts | length != 1 else '' }}
+  {% if test_mode %}&nbsp;·&nbsp; <span style="color:#3b9eff;">[TEST MODE]</span>{% endif %}
+</p>
+
+<!-- Summary KPIs -->
+<div class="kpi-row" style="margin-bottom:24px;">
+  <div class="kpi-cell">
+    <div class="kpi-value">{{ accounts | length }}</div>
+    <div class="kpi-label">Accounts</div>
+  </div>
+  {% set good_count = accounts | selectattr('health_category', 'equalto', 'Good') | list | length %}
+  {% set at_risk_count = accounts | selectattr('health_category', 'equalto', 'At Risk') | list | length %}
+  {% set critical_count = accounts | rejectattr('health_category', 'in', ['Good', 'At Risk']) | list | length %}
+  <div class="kpi-cell">
+    <div class="kpi-value" style="color:#10b981;">{{ good_count }}</div>
+    <div class="kpi-label">Healthy</div>
+  </div>
+  <div class="kpi-cell">
+    <div class="kpi-value" style="color:#f59e0b;">{{ at_risk_count }}</div>
+    <div class="kpi-label">At Risk</div>
+  </div>
+  <div class="kpi-cell">
+    <div class="kpi-value" style="color:#ef4444;">{{ critical_count }}</div>
+    <div class="kpi-label">Critical</div>
+  </div>
+</div>
+
+<hr class="section-divider" />
+
+<!-- Per-account cards -->
+{% for acct in accounts %}
+<div style="margin-bottom:24px; border-radius:6px; overflow:hidden; border-left:4px solid {{ health_border(acct.health_category) }};">
+  <!-- Account header bar — tinted by health status; bgcolor for Outlook -->
+  <table width="100%" cellpadding="0" cellspacing="0" role="presentation"
+         bgcolor="{{ health_tint(acct.health_category) }}"
+         style="border:1px solid #e2e8f0; border-left:none; border-radius:0 6px 0 0; background-color:{{ health_tint(acct.health_category) }};">
+    <tr bgcolor="{{ health_tint(acct.health_category) }}"
+        style="background-color:{{ health_tint(acct.health_category) }};">
+      <td style="padding:10px 16px; vertical-align:middle; background-color:{{ health_tint(acct.health_category) }};">
+        <span style="font-size:15px; font-weight:700; color:#1a2b4a;">{{ acct.account_name }}</span>
+        {% if acct.renewal_days is not none and acct.renewal_days <= 90 %}
+        <span class="change-pill {% if acct.renewal_days <= 30 %}pill-red{% elif acct.renewal_days <= 60 %}pill-amber{% else %}pill-blue{% endif %}"
+              style="display:inline-block; padding:1px 8px; border-radius:8px; font-size:11px; font-weight:600; margin-left:10px;
+              {% if acct.renewal_days <= 30 %}background-color:#fee2e2;color:#991b1b;{% elif acct.renewal_days <= 60 %}background-color:#fef3c7;color:#92400e;{% else %}background-color:#dbeafe;color:#1e40af;{% endif %}">
+          Renews in {{ acct.renewal_days }}d
+        </span>
+        {% endif %}
+      </td>
+      <td style="padding:10px 16px; vertical-align:middle; text-align:right; white-space:nowrap; background-color:{{ health_tint(acct.health_category) }};">
+        <span style="font-size:20px; font-weight:800; color:{{ health_color(acct.health_category) }};">
+          {{ acct.health_score }}
+        </span>
+        &nbsp;
+        {{ health_badge(acct.health_category) }}
+      </td>
+    </tr>
+  </table>
+
+  <!-- Score bar -->
+  <div style="background-color:#e5e7eb; height:4px; border-radius:0;">
+    <div class="score-{% if acct.health_category == 'Good' %}good{% elif acct.health_category == 'At Risk' %}at-risk{% else %}critical{% endif %}"
+         style="height:4px; width:{{ acct.health_score }}%; border-radius:0;"></div>
+  </div>
+
+  <!-- Account body -->
+  <div style="background-color:#ffffff; border:1px solid #e2e8f0; border-top:none; border-radius:0 0 6px 6px; padding:14px 16px;">
+    {% if acct.total_arr %}
+    <span style="font-size:12px; color:#94a3b8; text-transform:uppercase; letter-spacing:0.4px;">ARR</span>
+    <span style="font-size:13px; font-weight:600; color:#1a2b4a; margin-left:6px;">${{ "{:,.0f}".format(acct.total_arr) }}</span>
+    <span style="margin:0 10px; color:#e2e8f0;">|</span>
+    {% endif %}
+    <span style="font-size:12px; color:#94a3b8;">Week {{ acct.week_start }}</span>
+
+    {% if acct.narrative %}
+    <p class="card-text" style="font-size:13px; color:#334155; margin:12px 0 0; line-height:1.65; white-space:pre-wrap;">{{ acct.narrative }}</p>
+    {% endif %}
+    {% if acct.gong_summary %}
+    <div style="margin-top:{% if acct.narrative %}14px{% else %}12px{% endif %};">
+      <p class="card-title" style="margin-bottom:6px;">Recent Calls (Gong)</p>
+      <p class="card-text" style="font-size:13px; color:#334155; margin:0; line-height:1.65; white-space:pre-wrap;">{{ acct.gong_summary }}</p>
+    </div>
+    {% endif %}
+    {% if not acct.narrative and not acct.gong_summary %}
+    <p style="font-size:12px; color:#94a3b8; font-style:italic; margin:10px 0 0;">No activity summary this week.</p>
+    {% endif %}
+  </div>
+</div>
+{% endfor %}
+
+{% endblock %}

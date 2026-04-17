@@ -14,3 +14,12 @@ env:
   # SQL warehouse ID comes from the resource (add via UI with key "sql-warehouse")
   - name: DATABRICKS_WAREHOUSE_ID
     valueFrom: sql-warehouse
+  # SendGrid key pulled from the 'iona' secret scope — no plaintext secrets in code
+  # Key rotation: expires 2026-07-03; run: databricks secrets put-secret iona SENDGRID_API_KEY --string-value <new-key>
+  - name: SENDGRID_API_KEY
+    valueFrom: sendgrid-api-key
+  - name: SENDGRID_FROM_EMAIL
+    value: "do-not-reply-iona@ifs.com"
+  - name: SENDGRID_FROM_NAME
+    value: "Iona CSM"
+

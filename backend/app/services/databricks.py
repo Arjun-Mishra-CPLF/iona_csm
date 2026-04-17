@@ -7428,6 +7428,654 @@ class DatabricksService:
         )
 
 
+    # ==================== Notification Recipients Methods ====================
+
+    NOTIFICATION_RECIPIENTS_TABLE = "silver.silver_layer.notification_recipients"
+
+    def ensure_notification_recipients_table(self) -> bool:
+        """Create the notification_recipients table if it does not yet exist."""
+        with self.get_connection() as conn:
+            if conn is None:
+                return False
+            try:
+                cursor = conn.cursor()
+                cursor.execute(f"""
+                    CREATE TABLE IF NOT EXISTS {self.NOTIFICATION_RECIPIENTS_TABLE} (
+                        user_email    STRING        NOT NULL,
+                        user_name     STRING        NOT NULL,
+                        role          STRING        NOT NULL,
+                        receive_all_weekly  BOOLEAN NOT NULL DEFAULT false,
+                        receive_all_daily   BOOLEAN NOT NULL DEFAULT false,
+                        active        BOOLEAN       NOT NULL DEFAULT true,
+                        created_at    TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP(),
+                        updated_at    TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP()
+                    )
+                    USING DELTA
+                """)
+                cursor.close()
+                logger.info("ensure_notification_recipients_table: OK")
+                return True
+            except Exception as e:
+                logger.error(f"Error ensuring notification_recipients table: {e}", exc_info=True)
+                return False
+
+    def get_notification_recipients(
+        self,
+        active_only: bool = True,
+        receive_all_weekly: Optional[bool] = None,
+        receive_all_daily: Optional[bool] = None,
+    ) -> list:
+        """List notification recipients with optional filters."""
+        with self.get_connection() as conn:
+            if conn is None:
+                return []
+            try:
+                conditions = []
+                if active_only:
+                    conditions.append("active = true")
+                if receive_all_weekly is not None:
+                    conditions.append(f"receive_all_weekly = {'true' if receive_all_weekly else 'false'}")
+                if receive_all_daily is not None:
+                    conditions.append(f"receive_all_daily = {'true' if receive_all_daily else 'false'}")
+
+                where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+                cursor = conn.cursor()
+                cursor.execute(f"""
+                    SELECT user_email, user_name, role,
+                           receive_all_weekly, receive_all_daily, active,
+                           created_at, updated_at
+                    FROM {self.NOTIFICATION_RECIPIENTS_TABLE}
+                    {where}
+                    ORDER BY user_name
+                """)
+                rows = cursor.fetchall()
+                cursor.close()
+                result = []
+                for row in rows:
+                    result.append({
+                        "user_email": row[0],
+                        "user_name": row[1],
+                        "role": row[2],
+                        "receive_all_weekly": bool(row[3]),
+                        "receive_all_daily": bool(row[4]),
+                        "active": bool(row[5]),
+                        "created_at": str(row[6]) if row[6] else None,
+                        "updated_at": str(row[7]) if row[7] else None,
+                    })
+                return result
+            except Exception as e:
+                logger.error(f"Error fetching notification recipients: {e}", exc_info=True)
+                return []
+
+    def get_notification_recipient(self, user_email: str) -> Optional[dict]:
+        """Fetch a single notification recipient by email."""
+        with self.get_connection() as conn:
+            if conn is None:
+                return None
+            try:
+                safe_email = self._sql_escape(user_email)
+                cursor = conn.cursor()
+                cursor.execute(f"""
+                    SELECT user_email, user_name, role,
+                           receive_all_weekly, receive_all_daily, active,
+                           created_at, updated_at
+                    FROM {self.NOTIFICATION_RECIPIENTS_TABLE}
+                    WHERE user_email = '{safe_email}'
+                """)
+                row = cursor.fetchone()
+                cursor.close()
+                if not row:
+                    return None
+                return {
+                    "user_email": row[0],
+                    "user_name": row[1],
+                    "role": row[2],
+                    "receive_all_weekly": bool(row[3]),
+                    "receive_all_daily": bool(row[4]),
+                    "active": bool(row[5]),
+                    "created_at": str(row[6]) if row[6] else None,
+                    "updated_at": str(row[7]) if row[7] else None,
+                }
+            except Exception as e:
+                logger.error(f"Error fetching notification recipient {user_email}: {e}", exc_info=True)
+                return None
+
+    def create_notification_recipient(
+        self,
+        user_email: str,
+        user_name: str,
+        role: str,
+        receive_all_weekly: bool = False,
+        receive_all_daily: bool = False,
+    ) -> bool:
+        """Insert a new notification recipient. Returns False if email already exists."""
+        with self.get_connection() as conn:
+            if conn is None:
+                return False
+            try:
+                safe_email = self._sql_escape(user_email)
+                safe_name = self._sql_escape(user_name)
+                safe_role = self._sql_escape(role)
+                weekly = "true" if receive_all_weekly else "false"
+                daily = "true" if receive_all_daily else "false"
+                cursor = conn.cursor()
+                cursor.execute(f"""
+                    INSERT INTO {self.NOTIFICATION_RECIPIENTS_TABLE}
+                        (user_email, user_name, role, receive_all_weekly, receive_all_daily,
+                         active, created_at, updated_at)
+                    VALUES (
+                        '{safe_email}', '{safe_name}', '{safe_role}',
+                        {weekly}, {daily}, true,
+                        CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP()
+                    )
+                """)
+                cursor.close()
+                logger.info(f"create_notification_recipient: inserted {user_email}")
+                return True
+            except Exception as e:
+                logger.error(f"Error creating notification recipient {user_email}: {e}", exc_info=True)
+                return False
+
+    def update_notification_recipient(self, user_email: str, updates: dict) -> bool:
+        """Partial update of a notification recipient row. `updates` keys mirror column names."""
+        if not updates:
+            return True
+        with self.get_connection() as conn:
+            if conn is None:
+                return False
+            try:
+                allowed = {"user_name", "role", "receive_all_weekly", "receive_all_daily", "active"}
+                set_parts = []
+                for col, val in updates.items():
+                    if col not in allowed:
+                        continue
+                    if isinstance(val, bool):
+                        set_parts.append(f"{col} = {'true' if val else 'false'}")
+                    else:
+                        set_parts.append(f"{col} = '{self._sql_escape(str(val))}'")
+                if not set_parts:
+                    return True
+                set_parts.append("updated_at = CURRENT_TIMESTAMP()")
+                safe_email = self._sql_escape(user_email)
+                cursor = conn.cursor()
+                cursor.execute(f"""
+                    UPDATE {self.NOTIFICATION_RECIPIENTS_TABLE}
+                    SET {', '.join(set_parts)}
+                    WHERE user_email = '{safe_email}'
+                """)
+                cursor.close()
+                logger.info(f"update_notification_recipient: updated {user_email}")
+                return True
+            except Exception as e:
+                logger.error(f"Error updating notification recipient {user_email}: {e}", exc_info=True)
+                return False
+
+    def delete_notification_recipient(self, user_email: str) -> bool:
+        """Delete a notification recipient by email."""
+        with self.get_connection() as conn:
+            if conn is None:
+                return False
+            try:
+                safe_email = self._sql_escape(user_email)
+                cursor = conn.cursor()
+                cursor.execute(f"""
+                    DELETE FROM {self.NOTIFICATION_RECIPIENTS_TABLE}
+                    WHERE user_email = '{safe_email}'
+                """)
+                cursor.close()
+                logger.info(f"delete_notification_recipient: deleted {user_email}")
+                return True
+            except Exception as e:
+                logger.error(f"Error deleting notification recipient {user_email}: {e}", exc_info=True)
+                return False
+
+    # ==================== Notification Data Query Methods ====================
+
+    def get_accounts_with_csm_emails(self) -> list:
+        """Return all active accounts with their CSM id, name, email, and department."""
+        SF_USER_TABLE = "workspace.salesforce.user"
+        with self.get_connection() as conn:
+            if conn is None:
+                return []
+            try:
+                cursor = conn.cursor()
+                cursor.execute(f"""
+                    SELECT
+                        c.account_id,
+                        c.account AS account_name,
+                        c.csm_c AS csm_id,
+                        u.name AS csm_name,
+                        u.email AS csm_email,
+                        sf.department AS csm_department
+                    FROM {DIM_CUSTOMERS_TABLE} c
+                    LEFT JOIN {DIM_USERS_TABLE} u ON c.csm_c = u.id
+                    LEFT JOIN {SF_USER_TABLE} sf ON sf.id = u.id
+                    WHERE c._fivetran_deleted = false
+                    ORDER BY c.account
+                """)
+                rows = cursor.fetchall()
+                cursor.close()
+                return [
+                    {
+                        "account_id": row[0] or "",
+                        "account_name": row[1] or "Unknown",
+                        "csm_id": row[2] or "",
+                        "csm_name": row[3] or "Unassigned",
+                        "csm_email": row[4],
+                        "csm_department": row[5] or "Unknown",
+                    }
+                    for row in rows
+                ]
+            except Exception as e:
+                logger.error(f"Error fetching accounts with CSM emails: {e}", exc_info=True)
+                return []
+
+    def get_weekly_summaries_for_notification(self, week_start: Optional[str] = None) -> list:
+        """
+        Return the latest weekly summaries (current ISO week unless week_start given).
+        Each row: account_id, account_name, week_start, week_end, narrative, gong_summary.
+        """
+        SUMMARIES_TABLE = "silver.silver_layer.account_weekly_summaries"
+        with self.get_connection() as conn:
+            if conn is None:
+                return []
+            try:
+                if week_start:
+                    safe_ws = self._sql_escape(week_start)
+                    date_filter = f"WHERE week_start = '{safe_ws}'"
+                else:
+                    date_filter = "WHERE week_start = (SELECT MAX(week_start) FROM {table})".replace(
+                        "{table}", SUMMARIES_TABLE
+                    )
+
+                cursor = conn.cursor()
+                cursor.execute(f"""
+                    SELECT account_id, account_name, week_start, week_end,
+                           narrative, gong_summary, generated_at
+                    FROM {SUMMARIES_TABLE}
+                    {date_filter}
+                    ORDER BY account_name
+                """)
+                rows = cursor.fetchall()
+                cursor.close()
+                return [
+                    {
+                        "account_id": row[0] or "",
+                        "account_name": row[1] or "Unknown",
+                        "week_start": str(row[2]) if row[2] else "",
+                        "week_end": str(row[3]) if row[3] else "",
+                        "narrative": row[4] or "",
+                        "gong_summary": row[5] or "",
+                        "generated_at": str(row[6]) if row[6] else "",
+                    }
+                    for row in rows
+                ]
+            except Exception as e:
+                logger.error(f"Error fetching weekly summaries for notification: {e}", exc_info=True)
+                return []
+
+    def get_latest_health_scores_for_notification(self) -> dict:
+        """
+        Return dict[account_id -> {score, category, renewal_days, total_arr}]
+        from the most recent score_date in account_health_scores_history.
+        """
+        HEALTH_TABLE = "silver.silver_layer.account_health_scores_history"
+        with self.get_connection() as conn:
+            if conn is None:
+                return {}
+            try:
+                cursor = conn.cursor()
+                cursor.execute(f"""
+                    SELECT
+                        account_id,
+                        health_score,
+                        health_category,
+                        renewal_days,
+                        total_account_arr,
+                        nearest_renewal_arr
+                    FROM {HEALTH_TABLE}
+                    WHERE score_date = (SELECT MAX(score_date) FROM {HEALTH_TABLE})
+                """)
+                rows = cursor.fetchall()
+                cursor.close()
+                result = {}
+                for row in rows:
+                    result[row[0]] = {
+                        "score": int(row[1]) if row[1] is not None else 0,
+                        "category": row[2] or "Good",
+                        "renewal_days": int(row[3]) if row[3] is not None else 999,
+                        "total_arr": float(row[4]) if row[4] is not None else 0.0,
+                        "nearest_renewal_arr": float(row[5]) if row[5] is not None else 0.0,
+                    }
+                return result
+            except Exception as e:
+                logger.error(f"Error fetching latest health scores for notification: {e}", exc_info=True)
+                return {}
+
+    def get_health_score_changes_for_notification(self) -> list:
+        """
+        Detect accounts whose health score changed between the two most recent score_dates.
+        Returns list of change dicts.
+        """
+        HEALTH_TABLE = "silver.silver_layer.account_health_scores_history"
+        with self.get_connection() as conn:
+            if conn is None:
+                return []
+            try:
+                cursor = conn.cursor()
+                cursor.execute(f"""
+                    WITH ranked AS (
+                        SELECT
+                            account_id,
+                            account_name,
+                            health_score,
+                            health_category,
+                            score_date,
+                            ROW_NUMBER() OVER (PARTITION BY account_id ORDER BY score_date DESC) AS rn
+                        FROM {HEALTH_TABLE}
+                    ),
+                    today AS (SELECT * FROM ranked WHERE rn = 1),
+                    yesterday AS (SELECT * FROM ranked WHERE rn = 2)
+                    SELECT
+                        t.account_id,
+                        t.account_name,
+                        y.health_score AS prev_score,
+                        t.health_score AS curr_score,
+                        y.health_category AS prev_category,
+                        t.health_category AS curr_category
+                    FROM today t
+                    JOIN yesterday y ON t.account_id = y.account_id
+                    WHERE t.health_category != y.health_category
+                       OR ABS(t.health_score - y.health_score) >= 10
+                    ORDER BY ABS(t.health_score - y.health_score) DESC
+                """)
+                rows = cursor.fetchall()
+                cursor.close()
+                return [
+                    {
+                        "account_id": row[0] or "",
+                        "account_name": row[1] or "Unknown",
+                        "previous_score": int(row[2]) if row[2] is not None else 0,
+                        "current_score": int(row[3]) if row[3] is not None else 0,
+                        "previous_category": row[4] or "",
+                        "current_category": row[5] or "",
+                        "score_delta": int(row[3] or 0) - int(row[2] or 0),
+                        "category_changed": (row[4] or "") != (row[5] or ""),
+                    }
+                    for row in rows
+                ]
+            except Exception as e:
+                logger.error(f"Error detecting health score changes: {e}", exc_info=True)
+                return []
+
+    def get_support_changes_for_notification(self) -> list:
+        """
+        Detect new critical/high tickets opened today.
+        Returns list of account-level aggregates.
+        """
+        with self.get_connection() as conn:
+            if conn is None:
+                return []
+            try:
+                cursor = conn.cursor()
+                cursor.execute(f"""
+                    SELECT
+                        dfc.account_id,
+                        dfc.account_name,
+                        COUNT(CASE WHEN ft.priority = 'Urgent' AND DATE(ft.created_at) = CURRENT_DATE() THEN 1 END) AS new_critical,
+                        COUNT(CASE WHEN ft.priority = 'High' AND DATE(ft.created_at) = CURRENT_DATE() THEN 1 END) AS new_high,
+                        COUNT(CASE WHEN ft.label_for_customer NOT IN ('Closed', 'Resolved') THEN 1 END) AS total_open
+                    FROM {DIM_FRESHDESK_CUSTOMERS_TABLE} dfc
+                    JOIN {FCT_FRESHDESK_TICKETS_TABLE} ft ON dfc.company_id = ft.company_id
+                    GROUP BY dfc.account_id, dfc.account_name
+                    HAVING new_critical > 0 OR new_high > 0
+                    ORDER BY new_critical DESC, new_high DESC
+                """)
+                rows = cursor.fetchall()
+                cursor.close()
+                return [
+                    {
+                        "account_id": row[0] or "",
+                        "account_name": row[1] or "Unknown",
+                        "new_critical": int(row[2] or 0),
+                        "new_high": int(row[3] or 0),
+                        "total_open": int(row[4] or 0),
+                    }
+                    for row in rows
+                ]
+            except Exception as e:
+                logger.error(f"Error detecting support changes: {e}", exc_info=True)
+                return []
+
+    def get_pendo_usage_changes_for_notification(self) -> list:
+        """
+        Find accounts with >30% drop in active visitors vs their 7-day average.
+        """
+        with self.get_connection() as conn:
+            if conn is None:
+                return []
+            try:
+                cursor = conn.cursor()
+                cursor.execute(f"""
+                    WITH daily AS (
+                        SELECT
+                            dpa.account_id,
+                            dpa.account_name,
+                            fpad.date_day,
+                            fpad.count_active_visitors
+                        FROM silver.silver_layer.dim_pendo_account_customers dpa
+                        JOIN silver.silver_layer.fct_pendo_account_daily_metrics fpad
+                            ON dpa.pendo_account_id = fpad.pendo_account_id
+                        WHERE fpad.date_day >= CURRENT_DATE() - 8
+                    ),
+                    today_row AS (
+                        SELECT account_id, account_name, count_active_visitors AS today_visitors
+                        FROM daily
+                        WHERE date_day = CURRENT_DATE()
+                    ),
+                    avg_7d AS (
+                        SELECT account_id, AVG(count_active_visitors) AS avg_visitors
+                        FROM daily
+                        WHERE date_day < CURRENT_DATE()
+                        GROUP BY account_id
+                    )
+                    SELECT
+                        t.account_id,
+                        t.account_name,
+                        t.today_visitors,
+                        a.avg_visitors,
+                        ROUND((a.avg_visitors - t.today_visitors) / NULLIF(a.avg_visitors, 0) * 100, 1) AS drop_pct
+                    FROM today_row t
+                    JOIN avg_7d a ON t.account_id = a.account_id
+                    WHERE a.avg_visitors > 0
+                      AND (a.avg_visitors - t.today_visitors) / a.avg_visitors >= 0.30
+                    ORDER BY drop_pct DESC
+                """)
+                rows = cursor.fetchall()
+                cursor.close()
+                return [
+                    {
+                        "account_id": row[0] or "",
+                        "account_name": row[1] or "Unknown",
+                        "current_visitors": int(row[2] or 0),
+                        "avg_visitors_7d": float(row[3] or 0),
+                        "drop_pct": float(row[4] or 0),
+                        "trend": "declining",
+                    }
+                    for row in rows
+                ]
+            except Exception as e:
+                logger.error(f"Error detecting Pendo usage changes: {e}", exc_info=True)
+                return []
+
+    def get_gong_changes_for_notification(self) -> list:
+        """
+        Find accounts with new Gong calls today or risk tracker hits in the last call.
+        Also surfaces accounts with no meeting in 30+ days.
+        """
+        with self.get_connection() as conn:
+            if conn is None:
+                return []
+            try:
+                risk_trackers = ", ".join(f"'{t}'" for t in GONG_RISK_TRACKERS)
+                cursor = conn.cursor()
+                cursor.execute(f"""
+                    WITH account_calls AS (
+                        SELECT
+                            b.object_id AS sf_account_id,
+                            COUNT(CASE WHEN DATE(g.started) = CURRENT_DATE() THEN 1 END) AS new_calls_today,
+                            MAX(g.started) AS last_call_dt,
+                            DATEDIFF(CURRENT_DATE(), DATE(MAX(g.started))) AS days_since_last
+                        FROM {GONG_CALL_TABLE} g
+                        JOIN {GONG_BRIDGE_TABLE} b
+                            ON g.id = b.call_id AND b.object_type = 'account'
+                        GROUP BY b.object_id
+                    ),
+                    risk_hits AS (
+                        SELECT
+                            b.object_id AS sf_account_id,
+                            COUNT(*) AS risk_count
+                        FROM {GONG_TRACKER_HIT_TABLE} th
+                        JOIN {GONG_CALL_TABLE} g ON th.call_id = g.id
+                        JOIN {GONG_BRIDGE_TABLE} b ON g.id = b.call_id AND b.object_type = 'account'
+                        WHERE th.tracker_name IN ({risk_trackers})
+                          AND DATE(g.started) >= CURRENT_DATE() - 1
+                        GROUP BY b.object_id
+                    )
+                    SELECT
+                        c.account_id,
+                        c.account AS account_name,
+                        COALESCE(ac.new_calls_today, 0) AS new_calls_today,
+                        COALESCE(rh.risk_count, 0) AS risk_tracker_hits,
+                        ac.days_since_last
+                    FROM {DIM_CUSTOMERS_TABLE} c
+                    LEFT JOIN account_calls ac ON c.account_id = ac.sf_account_id
+                    LEFT JOIN risk_hits rh ON c.account_id = rh.sf_account_id
+                    WHERE c._fivetran_deleted = false
+                      AND (
+                          COALESCE(ac.new_calls_today, 0) > 0
+                          OR COALESCE(rh.risk_count, 0) > 0
+                          OR COALESCE(ac.days_since_last, 999) >= 30
+                      )
+                    ORDER BY risk_tracker_hits DESC, new_calls_today DESC
+                """)
+                rows = cursor.fetchall()
+                cursor.close()
+                results = []
+                for row in rows:
+                    new_calls = int(row[2] or 0)
+                    risk_hits = int(row[3] or 0)
+                    days_since = int(row[4]) if row[4] is not None else None
+                    alert_type = (
+                        "risk_signal" if risk_hits > 0
+                        else "new_call" if new_calls > 0
+                        else "no_meeting"
+                    )
+                    results.append({
+                        "account_id": row[0] or "",
+                        "account_name": row[1] or "Unknown",
+                        "new_calls_today": new_calls,
+                        "risk_tracker_hits": risk_hits,
+                        "days_since_last_meeting": days_since,
+                        "alert_type": alert_type,
+                    })
+                return results
+            except Exception as e:
+                logger.error(f"Error detecting Gong changes: {e}", exc_info=True)
+                return []
+
+    def get_renewal_alerts_for_notification(self) -> list:
+        """
+        Find accounts with renewals entering 30/60/90-day windows today.
+        """
+        with self.get_connection() as conn:
+            if conn is None:
+                return []
+            try:
+                cursor = conn.cursor()
+                cursor.execute(f"""
+                    WITH renewal_windows AS (
+                        SELECT
+                            c.account_id,
+                            c.account AS account_name,
+                            MIN(f.renewal_days) AS renewal_days,
+                            SUM(f.arr_cad) AS total_arr
+                        FROM {DIM_CUSTOMERS_TABLE} c
+                        JOIN silver.silver_layer.fct_contracts f ON c.account_id = f.account_id
+                        WHERE c._fivetran_deleted = false
+                          AND f.renewal_not_yet_contracted = 'Y'
+                          AND f.revenue_type NOT IN ('Services', 'Perpetual')
+                          AND f.churn_expected_occurred = 'nan'
+                          AND f.rev_rec_end_date > CURRENT_DATE()
+                        GROUP BY c.account_id, c.account
+                    )
+                    SELECT
+                        account_id,
+                        account_name,
+                        renewal_days,
+                        total_arr,
+                        CASE
+                            WHEN renewal_days <= 30 THEN '30d'
+                            WHEN renewal_days <= 60 THEN '60d'
+                            WHEN renewal_days <= 90 THEN '90d'
+                        END AS window
+                    FROM renewal_windows
+                    WHERE renewal_days BETWEEN 1 AND 90
+                      AND total_arr > 0
+                    ORDER BY renewal_days ASC
+                """)
+                rows = cursor.fetchall()
+                cursor.close()
+                return [
+                    {
+                        "account_id": row[0] or "",
+                        "account_name": row[1] or "Unknown",
+                        "renewal_days": int(row[2] or 0),
+                        "arr": float(row[3] or 0),
+                        "window": row[4] or "90d",
+                    }
+                    for row in rows
+                ]
+            except Exception as e:
+                logger.error(f"Error detecting renewal alerts: {e}", exc_info=True)
+                return []
+
+    def get_user_notification_preferences(self, user_email: str) -> dict:
+        """
+        Return a dict of notification preference keys -> 'enabled'/'disabled'.
+        Missing keys default to 'enabled' (opt-out model).
+        """
+        KEYS = [
+            "notification.weekly_summary",
+            "notification.daily_health",
+            "notification.daily_support",
+            "notification.daily_usage",
+            "notification.daily_gong",
+            "notification.daily_renewal",
+        ]
+        prefs = {}
+        with self.get_connection() as conn:
+            if conn is None:
+                return {k: "enabled" for k in KEYS}
+            try:
+                safe_email = self._sql_escape(user_email)
+                keys_in = ", ".join(f"'{k}'" for k in KEYS)
+                cursor = conn.cursor()
+                cursor.execute(f"""
+                    SELECT preference_key, preference_value
+                    FROM {self.PREFERENCES_TABLE}
+                    WHERE user_email = '{safe_email}'
+                      AND preference_key IN ({keys_in})
+                """)
+                rows = cursor.fetchall()
+                cursor.close()
+                for row in rows:
+                    prefs[row[0]] = row[1]
+            except Exception as e:
+                logger.error(f"Error fetching notification preferences for {user_email}: {e}", exc_info=True)
+        return {k: prefs.get(k, "enabled") for k in KEYS}
+
+
 # Dependency injection
 def get_databricks_service() -> DatabricksService:
     """Get Databricks service instance."""

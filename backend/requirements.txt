@@ -16,3 +16,6 @@ httpx>=0.26.0
 # QBR generation
 python-pptx>=0.6.21
 fpdf2>=2.7.0
+
+# Email templating
+jinja2>=3.1.0

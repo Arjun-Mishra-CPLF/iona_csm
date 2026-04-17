@@ -1,0 +1,147 @@
+{% extends "base.html" %}
+{% from '_email_health_macros.html' import health_badge, health_color, health_tint, health_border %}
+
+{% block title %}Daily Account Changes — {{ report_date }}{% endblock %}
+
+{% block content %}
+<p class="content-title">Daily Account Changes</p>
+<p class="content-subtitle">{{ report_date }} &nbsp;·&nbsp; {{ total_accounts }} account{{ 's' if total_accounts != 1 else '' }} with changes</p>
+
+{% if total_accounts == 0 %}
+<div class="card">
+  <p class="card-text" style="color:#94a3b8; font-style:italic;">No significant changes detected today across your accounts.</p>
+</div>
+{% endif %}
+
+{% for account in accounts %}
+<!-- === ACCOUNT CARD === -->
+<div style="margin-bottom:24px; border:1px solid #e2e8f0; border-radius:8px; overflow:hidden; border-left:4px solid {{ health_border(account.current_category) }};">
+
+  <!-- Account header — tinted by health status; bgcolor for Outlook -->
+  <table width="100%" cellpadding="0" cellspacing="0" role="presentation"
+         bgcolor="{{ health_tint(account.current_category) }}">
+    <tr bgcolor="{{ health_tint(account.current_category) }}"
+        style="background-color:{{ health_tint(account.current_category) }}; border-bottom:1px solid #e2e8f0;">
+      <td style="padding:12px 18px; background-color:{{ health_tint(account.current_category) }};">
+        <span style="font-size:15px; font-weight:700; color:#1a2b4a;">{{ account.account_name }}</span>
+      </td>
+      <td align="right" style="padding:12px 18px; background-color:{{ health_tint(account.current_category) }}; white-space:nowrap;">
+        {% if account.current_category %}
+          {{ health_badge(account.current_category) }}
+        {% endif %}
+      </td>
+    </tr>
+  </table>
+
+  <div style="padding:14px 18px;">
+
+    <!-- Health score changes -->
+    {% if account.health_changes %}
+    <div class="change-item">
+      <div class="change-label">
+        &#x1F4C8; Health Score
+        <span class="change-pill {% if account.health_changes[0].category_changed %}pill-red{% elif account.health_changes[0].score_delta < 0 %}pill-amber{% else %}pill-green{% endif %}"
+              style="display:inline-block; padding:1px 8px; border-radius:8px; font-size:11px; font-weight:600; margin-left:6px;
+                     {% if account.health_changes[0].category_changed %}background-color:#fee2e2;color:#991b1b;{% elif account.health_changes[0].score_delta < 0 %}background-color:#fef3c7;color:#92400e;{% else %}background-color:#d1fae5;color:#065f46;{% endif %}">
+          {% if account.health_changes[0].category_changed %}Category Changed{% elif account.health_changes[0].score_delta < 0 %}Declined{% else %}Improved{% endif %}
+        </span>
+      </div>
+      <div class="change-desc">
+        {% set hc = account.health_changes[0] %}
+        <span style="color:{{ health_color(hc.previous_category) }}; font-weight:600;">{{ hc.previous_score }}</span>
+        &rarr;
+        <span style="color:{{ health_color(hc.current_category) }}; font-weight:700;">{{ hc.current_score }}</span>
+        ({{ '+' if hc.score_delta > 0 else '' }}{{ hc.score_delta }} pts)
+        {% if hc.category_changed %}
+          &nbsp;·&nbsp; <strong style="color:{{ health_color(hc.previous_category) }};">{{ hc.previous_category }}</strong>
+          &rarr; <strong style="color:{{ health_color(hc.current_category) }};">{{ hc.current_category }}</strong>
+        {% endif %}
+      </div>
+    </div>
+    {% endif %}
+
+    <!-- Support ticket changes -->
+    {% if account.support_changes %}
+    <div class="change-item">
+      {% set sc = account.support_changes[0] %}
+      <div class="change-label">
+        &#x1F3AB; Support Tickets
+        {% if sc.new_critical > 0 %}<span class="change-pill pill-red" style="display:inline-block;padding:1px 8px;border-radius:8px;font-size:11px;font-weight:600;margin-left:6px;background-color:#fee2e2;color:#991b1b;">{{ sc.new_critical }} Critical</span>{% endif %}
+        {% if sc.new_high > 0 %}<span class="change-pill pill-amber" style="display:inline-block;padding:1px 8px;border-radius:8px;font-size:11px;font-weight:600;margin-left:4px;background-color:#fef3c7;color:#92400e;">{{ sc.new_high }} High</span>{% endif %}
+      </div>
+      <div class="change-desc">
+        {{ sc.new_critical + sc.new_high }} new urgent/high ticket{{ 's' if sc.new_critical + sc.new_high != 1 else '' }} opened today.
+        Total open: {{ sc.total_open }}.
+      </div>
+    </div>
+    {% endif %}
+
+    <!-- Usage anomalies -->
+    {% if account.usage_changes %}
+    <div class="change-item">
+      {% set uc = account.usage_changes[0] %}
+      <div class="change-label">
+        &#x1F4CA; Product Usage
+        <span class="change-pill pill-amber" style="display:inline-block;padding:1px 8px;border-radius:8px;font-size:11px;font-weight:600;margin-left:6px;background-color:#fef3c7;color:#92400e;">Usage Drop</span>
+      </div>
+      <div class="change-desc">
+        Active visitors today: <strong>{{ uc.current_visitors }}</strong>
+        (7-day avg: {{ "{:.0f}".format(uc.avg_visitors_7d) }}).
+        Down <strong>{{ "{:.0f}".format(uc.drop_pct) }}%</strong> from baseline.
+      </div>
+    </div>
+    {% endif %}
+
+    <!-- Gong activity -->
+    {% if account.gong_changes %}
+    <div class="change-item">
+      {% set gc = account.gong_changes[0] %}
+      <div class="change-label">
+        &#x1F4DE; Gong Activity
+        {% if gc.alert_type == 'risk_signal' %}<span class="change-pill pill-red" style="display:inline-block;padding:1px 8px;border-radius:8px;font-size:11px;font-weight:600;margin-left:6px;background-color:#fee2e2;color:#991b1b;">Risk Signal</span>
+        {% elif gc.alert_type == 'no_meeting' %}<span class="change-pill pill-amber" style="display:inline-block;padding:1px 8px;border-radius:8px;font-size:11px;font-weight:600;margin-left:6px;background-color:#fef3c7;color:#92400e;">No Meeting</span>
+        {% else %}<span class="change-pill pill-blue" style="display:inline-block;padding:1px 8px;border-radius:8px;font-size:11px;font-weight:600;margin-left:6px;background-color:#dbeafe;color:#1e40af;">New Call</span>{% endif %}
+      </div>
+      <div class="change-desc">
+        {% if gc.alert_type == 'risk_signal' %}
+          {{ gc.risk_tracker_hits }} risk tracker hit{{ 's' if gc.risk_tracker_hits != 1 else '' }} detected in recent call(s).
+        {% elif gc.alert_type == 'no_meeting' %}
+          No Gong meeting recorded in {{ gc.days_since_last_meeting }} days.
+        {% else %}
+          {{ gc.new_calls_today }} new call{{ 's' if gc.new_calls_today != 1 else '' }} recorded today.
+        {% endif %}
+      </div>
+    </div>
+    {% endif %}
+
+    <!-- Renewal alerts -->
+    {% if account.renewal_alerts %}
+    <div class="change-item">
+      {% set ra = account.renewal_alerts[0] %}
+      <div class="change-label">
+        &#x1F4C5; Renewal
+        <span class="change-pill {% if ra.window == '30d' %}pill-red{% elif ra.window == '60d' %}pill-amber{% else %}pill-blue{% endif %}"
+              style="display:inline-block;padding:1px 8px;border-radius:8px;font-size:11px;font-weight:600;margin-left:6px;
+              {% if ra.window == '30d' %}background-color:#fee2e2;color:#991b1b;{% elif ra.window == '60d' %}background-color:#fef3c7;color:#92400e;{% else %}background-color:#dbeafe;color:#1e40af;{% endif %}">
+          {{ ra.window }} window
+        </span>
+      </div>
+      <div class="change-desc">
+        Renewal in <strong>{{ ra.renewal_days }} days</strong>.
+        {% if ra.arr %} ARR: <strong>${{ "{:,.0f}".format(ra.arr) }}</strong>{% endif %}
+      </div>
+    </div>
+    {% endif %}
+
+  </div><!-- /padding -->
+</div><!-- /account card -->
+{% endfor %}
+
+<!-- Summary footer note -->
+{% if total_accounts > 0 %}
+<p style="font-size:12px; color:#94a3b8; margin-top:8px;">
+  Showing {{ total_accounts }} account{{ 's' if total_accounts != 1 else '' }} with detected changes.
+  Log in to the Iona CSM dashboard for full details.
+</p>
+{% endif %}
+{% endblock %}

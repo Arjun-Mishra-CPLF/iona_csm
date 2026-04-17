@@ -30,9 +30,9 @@ Since the Databricks CLI is blocked by Application Control policy, follow these 
 3. Navigate to `/Users/misagh.jebeli@ifs.com/`
 4. Click **Create** → **Folder** → Name it `iona-cx`
 5. Open the `iona-cx` folder
-6. Click **Import** (or drag and drop) to upload these files/folders from `c:\navigate\backend\`:
-   - `app/` folder (the entire folder)
-   - `static/` folder (the entire folder)
+6. Click **Import** (or drag and drop) to upload these files/folders from your local `backend/` directory:
+   - `app/` folder (the entire folder, including `app/templates/` for SendGrid HTML emails)
+   - `static/` folder (the entire folder — run `cd frontend && npm install && npm run build:prod` first)
    - `app.yaml`
    - `requirements.txt`
 
@@ -63,6 +63,17 @@ The app is configured to connect to:
 - **SQL Warehouse**: /sql/1.0/warehouses/e0f7c35bbfc5d9cd
 
 Authentication is handled automatically by Databricks Apps using the app's service principal.
+
+### SendGrid and notifications (production)
+
+In **Compute → Apps → your app → Environment variables** (or Secrets), set:
+
+- **`SENDGRID_API_KEY`** — required for weekly/daily emails; store as a secret, do not paste into source control.
+- **`SENDGRID_FROM_EMAIL`** / **`SENDGRID_FROM_NAME`** — optional; defaults are already set in `app.yaml`.
+
+Ensure outbound access to **`https://api.sendgrid.com`** is allowed. The API key expires **2026-07-03**; rotate by updating the secret only.
+
+After deploy, verify mail with **`POST /api/notifications/test-email`** on your app base URL, then configure recipients and schedulers as described in the main [README.md](README.md) **Deploying to Databricks Apps** section. For the full notification reference (delivery modes, API parameters, OIDC auth, templates, and testing checklist) see **[docs/notifications.md](docs/notifications.md)**.
 
 ## Troubleshooting
 

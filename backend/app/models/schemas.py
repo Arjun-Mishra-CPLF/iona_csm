@@ -983,3 +983,127 @@ class CustomerGrowthBreakdownResponse(BaseModel):
     """Breakdown of customer growth by a dimension (region/industry)."""
     dimension: str  # "industry" or "region"
     groups: List[GroupSeries] = []
+
+
+# ============================================
+# Notification / Email Schemas
+# ============================================
+
+class NotificationRecipient(BaseModel):
+    """A user enrolled to receive bulk notification emails."""
+    user_email: str
+    user_name: str
+    role: str  # 'csm_lead', 'manager', 'admin', 'executive'
+    receive_all_weekly: bool = False
+    receive_all_daily: bool = False
+    active: bool = True
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
+class NotificationRecipientCreate(BaseModel):
+    user_email: str
+    user_name: str
+    role: str
+    receive_all_weekly: bool = False
+    receive_all_daily: bool = False
+
+
+class NotificationRecipientUpdate(BaseModel):
+    user_name: Optional[str] = None
+    role: Optional[str] = None
+    receive_all_weekly: Optional[bool] = None
+    receive_all_daily: Optional[bool] = None
+    active: Optional[bool] = None
+
+
+class TestEmailRequest(BaseModel):
+    to_email: str
+    to_name: Optional[str] = None
+
+
+class TriggerEmailResponse(BaseModel):
+    success: bool
+    emails_sent: int = 0
+    emails_failed: int = 0
+    skipped: int = 0
+    errors: List[str] = []
+    detail: str = ""
+    test_mode: bool = False
+    test_recipient: Optional[str] = Field(
+        default=None,
+        description="Normalized test addresses echoed back; comma-separated when multiple were used.",
+    )
+
+
+class AccountHealthChange(BaseModel):
+    """A detected health score change for one account."""
+    account_id: str
+    account_name: str
+    previous_score: int
+    current_score: int
+    previous_category: str
+    current_category: str
+    score_delta: int
+    category_changed: bool
+
+
+class AccountSupportChange(BaseModel):
+    """Detected support ticket changes for one account."""
+    account_id: str
+    account_name: str
+    new_critical: int = 0
+    new_high: int = 0
+    total_open: int = 0
+    sentiment_change: Optional[str] = None
+
+
+class AccountUsageChange(BaseModel):
+    """Detected Pendo usage anomalies for one account."""
+    account_id: str
+    account_name: str
+    current_visitors: int = 0
+    avg_visitors_7d: float = 0.0
+    drop_pct: float = 0.0
+    trend: str = "stable"  # 'declining', 'stable', 'improving'
+
+
+class AccountGongChange(BaseModel):
+    """Detected Gong activity for one account."""
+    account_id: str
+    account_name: str
+    new_calls_today: int = 0
+    risk_tracker_hits: int = 0
+    days_since_last_meeting: Optional[int] = None
+    alert_type: str = ""  # 'risk_signal', 'no_meeting', 'new_call'
+
+
+class AccountRenewalAlert(BaseModel):
+    """Renewal proximity alert for one account."""
+    account_id: str
+    account_name: str
+    renewal_days: int
+    arr: float = 0.0
+    window: str  # '30d', '60d', '90d'
+
+
+class DailyChangeSummary(BaseModel):
+    """Aggregated daily changes across all categories for one account."""
+    account_id: str
+    account_name: str
+    csm_email: Optional[str] = None
+    health_changes: List[AccountHealthChange] = []
+    support_changes: List[AccountSupportChange] = []
+    usage_changes: List[AccountUsageChange] = []
+    gong_changes: List[AccountGongChange] = []
+    renewal_alerts: List[AccountRenewalAlert] = []
+
+    @property
+    def has_changes(self) -> bool:
+        return any([
+            self.health_changes,
+            self.support_changes,
+            self.usage_changes,
+            self.gong_changes,
+            self.renewal_alerts,
+        ])
