@@ -198,6 +198,7 @@ DIM_FRESHDESK_CUSTOMERS_TABLE = "silver.silver_layer.dim_freshdesk_account_custo
 FCT_FRESHDESK_TICKETS_TABLE = "silver.silver_layer.fct_freshdesk_ticket_history"
 DIM_FRESHDESK_CONVERSATION_SUMMARY_TABLE = "silver.silver_layer.dim_freshdesk_ticket_conversation_summary"
 KB_CONFLUENCE_CUSTOMER_CONTEXT_TABLE = "silver.silver_layer.kb_confluence_customer_context"
+FCT_CONTRACTS_TABLE = "silver.silver_layer.fct_contracts"
 
 CSM_NOTES_TABLE = "silver.silver_layer.csm_notes"
 CSM_NOTE_ATTACHMENTS_TABLE = "silver.silver_layer.csm_note_attachments"
@@ -488,7 +489,7 @@ class DatabricksService:
 
     def get_renewal_contract_lines_for_account(self, account_id: str) -> List[dict]:
         """Open renewal contract rows for materiality-weighted health (same filters as portfolio ARR)."""
-        FCT_TABLE = "silver.silver_layer.fct_contracts"
+        FCT_TABLE = FCT_CONTRACTS_TABLE
         safe = self._sql_escape(account_id)
         rows: List[dict] = []
         try:
@@ -501,15 +502,15 @@ class DatabricksService:
                     SELECT
                         COALESCE(revenue_type, '') AS revenue_type,
                         COALESCE(ARR_EUR, 0) AS arr_eur,
-                        TRY_CAST(rev_rec_end_date AS DATE) AS renewal_date,
-                        DATEDIFF(TRY_CAST(rev_rec_end_date AS DATE), CURRENT_DATE()) AS renewal_days,
+                        rev_rec_end_date AS renewal_date,
+                        DATEDIFF(rev_rec_end_date, CURRENT_DATE()) AS renewal_days,
                         COALESCE(CONTRACT_GROUP, '') AS contract_group
                     FROM {FCT_TABLE}
                     WHERE account_id = '{safe}'
                       AND RENEWAL_NOT_YET_CONTRACTED = 'Y'
                       AND revenue_type NOT IN ('Services', 'Perpetual')
-                      AND churn_expected_occurred = 'nan'
-                      AND TRY_CAST(rev_rec_end_date AS DATE) > CURRENT_DATE()
+                      AND (churn_expected_occurred IS NULL OR churn_expected_occurred = 'nan')
+                      AND rev_rec_end_date > CURRENT_DATE()
                     ORDER BY renewal_days ASC
                     """
                 )
@@ -1849,7 +1850,7 @@ class DatabricksService:
         
         # Fall back to SQL-based approximation
         logger.info("Falling back to SQL-based health score estimation")
-        FCT_TABLE = "silver.silver_layer.fct_contracts"
+        FCT_TABLE = FCT_CONTRACTS_TABLE
         
         try:
             cursor = conn.cursor()
@@ -1871,8 +1872,8 @@ class DatabricksService:
                         MIN(
                             CASE 
                                 WHEN fct.RENEWAL_NOT_YET_CONTRACTED = 'Y' 
-                                    AND TRY_CAST(fct.rev_rec_end_date AS DATE) IS NOT NULL
-                                THEN DATEDIFF(TRY_CAST(fct.REV_REC_END_DATE AS DATE), CURRENT_DATE())
+                                    AND fct.rev_rec_end_date IS NOT NULL
+                                THEN DATEDIFF(fct.REV_REC_END_DATE, CURRENT_DATE())
                                 ELSE 9999
                             END
                         ) as renewal_days
@@ -1968,7 +1969,7 @@ class DatabricksService:
         This is MUCH faster than calculating in Python for each account.
         Uses the same scoring logic as calculate_health_score_detail but in SQL.
         """
-        FCT_TABLE = "silver.silver_layer.fct_contracts"
+        FCT_TABLE = FCT_CONTRACTS_TABLE
         PENDO_ACCOUNTS = "silver.silver_layer.dim_pendo_account_customers"
         PENDO_ACCOUNT_DAILY = "silver.silver_layer.fct_pendo_account_daily_metrics"
         
@@ -2040,19 +2041,19 @@ class DatabricksService:
                             CASE 
                                 WHEN fct.RENEWAL_NOT_YET_CONTRACTED = 'Y' 
                                     AND fct.revenue_type NOT IN ('Services', 'Perpetual')
-                                    AND fct.churn_expected_occurred = 'nan'
-                                    AND TRY_CAST(fct.rev_rec_end_date AS DATE) > CURRENT_DATE()
-                                THEN DATEDIFF(TRY_CAST(fct.REV_REC_END_DATE AS DATE), CURRENT_DATE())
+                                    AND (fct.churn_expected_occurred IS NULL OR fct.churn_expected_occurred = 'nan')
+                                    AND fct.rev_rec_end_date > CURRENT_DATE()
+                                THEN DATEDIFF(fct.REV_REC_END_DATE, CURRENT_DATE())
                                 ELSE 9999
                             END
                         ) as renewal_days,
-                        MIN(TRY_CAST(fct.REV_REC_END_DATE AS DATE)) as renewal_date
+                        MIN(fct.REV_REC_END_DATE) as renewal_date
                     FROM account_base ab
                     LEFT JOIN {FCT_TABLE} fct ON ab.account_id = fct.account_id
                         AND fct.RENEWAL_NOT_YET_CONTRACTED = 'Y'
                         AND fct.revenue_type NOT IN ('Services', 'Perpetual')
-                        AND fct.churn_expected_occurred = 'nan'
-                        AND TRY_CAST(fct.rev_rec_end_date AS DATE) > CURRENT_DATE()
+                        AND (fct.churn_expected_occurred IS NULL OR fct.churn_expected_occurred = 'nan')
+                        AND fct.rev_rec_end_date > CURRENT_DATE()
                     GROUP BY ab.account_id, ab.name, ab.industry, ab.csm_name, ab.parent_id, ab.parent_name, ab.account_executive
                 ),
                 account_tickets AS (
@@ -2185,7 +2186,7 @@ class DatabricksService:
     def get_metrics_summary(self, account_type: Optional[str] = None, renewal_period: int = 90) -> MetricsSummary:
         """Get dashboard KPI metrics from dim_customers + fct_contracts for renewals."""
         logger.info(f"get_metrics_summary called with account_type={account_type}, renewal_period={renewal_period}")
-        FCT_TABLE = "silver.silver_layer.fct_contracts"
+        FCT_TABLE = FCT_CONTRACTS_TABLE
         with self.get_connection() as conn:
             if conn is None:
                 logger.error("Connection is None - cannot fetch metrics")
@@ -2231,13 +2232,12 @@ class DatabricksService:
                 good, at_risk, critical = self._calculate_at_risk_count_by_health_score(conn, account_type)
 
                 # Renewal KPI from fct_contracts (EUR, dynamic period)
-                # TRY_CAST: rev_rec_end_date may be string 'nan' in fct_contracts
                 fct_where = f"""
                     c.RENEWAL_NOT_YET_CONTRACTED = 'Y'
                     AND c.revenue_type NOT IN ('Services', 'Perpetual')
-                    AND c.churn_expected_occurred = 'nan'
-                    AND TRY_CAST(c.rev_rec_end_date AS DATE) > CURRENT_DATE()
-                    AND TRY_CAST(c.rev_rec_end_date AS DATE) <= DATE_ADD(CURRENT_DATE(), {int(renewal_period)})
+                    AND (c.churn_expected_occurred IS NULL OR c.churn_expected_occurred = 'nan')
+                    AND c.rev_rec_end_date > CURRENT_DATE()
+                    AND c.rev_rec_end_date <= DATE_ADD(CURRENT_DATE(), {int(renewal_period)})
                 """
                 if account_type:
                     fct_where += f"\n                    AND dc.account_type = '{safe_type}'"
@@ -2264,9 +2264,9 @@ class DatabricksService:
                 arr_where = f"""
                     c.RENEWAL_NOT_YET_CONTRACTED = 'Y'
                     AND c.revenue_type NOT IN ('Services', 'Perpetual')
-                    AND c.churn_expected_occurred = 'nan'
-                    AND TRY_CAST(c.rev_rec_end_date AS DATE) > CURRENT_DATE()
-                    AND YEAR(TRY_CAST(c.rev_rec_end_date AS DATE)) = YEAR(CURRENT_DATE())
+                    AND (c.churn_expected_occurred IS NULL OR c.churn_expected_occurred = 'nan')
+                    AND c.rev_rec_end_date > CURRENT_DATE()
+                    AND YEAR(c.rev_rec_end_date) = YEAR(CURRENT_DATE())
                 """
                 if account_type:
                     arr_where += f"\n                    AND dc.account_type = '{safe_type}'"
@@ -2377,7 +2377,7 @@ class DatabricksService:
                 raise Exception("Database connection failed")
             try:
                 cursor = conn.cursor()
-                query = """
+                query = f"""
                     SELECT 
                         COALESCE(account_type, 'Unknown') as account_type,
                         COUNT(*) as cnt
@@ -2386,7 +2386,7 @@ class DatabricksService:
                     AND COALESCE(account_type, '') != 'Churn'
                     AND account_id NOT IN (
                         SELECT fc.account_id
-                        FROM silver.silver_layer.fct_contracts fc
+                        FROM {FCT_CONTRACTS_TABLE} fc
                         WHERE fc.account_id IS NOT NULL
                         GROUP BY fc.account_id
                         HAVING COUNT(*) = SUM(
@@ -2422,10 +2422,10 @@ class DatabricksService:
         today = date.today()
 
         # Subquery to identify fully churned accounts
-        churned_exclusion = """
+        churned_exclusion = f"""
             account_id NOT IN (
                 SELECT fc.account_id
-                FROM silver.silver_layer.fct_contracts fc
+                FROM {FCT_CONTRACTS_TABLE} fc
                 WHERE fc.account_id IS NOT NULL
                 GROUP BY fc.account_id
                 HAVING COUNT(*) = SUM(
@@ -2480,7 +2480,7 @@ class DatabricksService:
                 logger.info(f"Total customers now: {total_now}")
 
                 # 3. Individual events (new customers) for the timeline
-                FCT_TABLE = "silver.silver_layer.fct_contracts"
+                FCT_TABLE = FCT_CONTRACTS_TABLE
                 q3 = f"""
                     SELECT
                         c.account_id,
@@ -2658,7 +2658,7 @@ class DatabricksService:
         today = date.today()
 
         # Determine the column to group by
-        FCT_TABLE = "silver.silver_layer.fct_contracts"
+        FCT_TABLE = FCT_CONTRACTS_TABLE
         use_join = False
         if dimension == "region":
             # region is on fct_contracts, need a subquery/join
@@ -2668,10 +2668,10 @@ class DatabricksService:
             # industry is on dim_customers directly
             group_col = "industry"
 
-        churned_exclusion = """
+        churned_exclusion = f"""
             c.account_id NOT IN (
                 SELECT fc.account_id
-                FROM silver.silver_layer.fct_contracts fc
+                FROM {FCT_CONTRACTS_TABLE} fc
                 WHERE fc.account_id IS NOT NULL
                 GROUP BY fc.account_id
                 HAVING COUNT(*) = SUM(
@@ -2894,7 +2894,7 @@ class DatabricksService:
                 cursor = conn.cursor()
 
                 # Base query - include parent account info; renewals fetched in bulk later
-                FCT_TABLE = "silver.silver_layer.fct_contracts"
+                FCT_TABLE = FCT_CONTRACTS_TABLE
                 base_query = f"""
                     SELECT 
                         c.account_id,
@@ -2944,9 +2944,9 @@ class DatabricksService:
                                 SELECT ACCOUNT_ID FROM {FCT_TABLE}
                                 WHERE RENEWAL_NOT_YET_CONTRACTED = 'Y'
                                   AND revenue_type NOT IN ('Services', 'Perpetual')
-                                  AND churn_expected_occurred = 'nan'
-                                  AND TRY_CAST(rev_rec_end_date AS DATE) > CURRENT_DATE()
-                                  AND TRY_CAST(rev_rec_end_date AS DATE) <= DATE_ADD(CURRENT_DATE(), 90)
+                                  AND (churn_expected_occurred IS NULL OR churn_expected_occurred = 'nan')
+                                  AND rev_rec_end_date > CURRENT_DATE()
+                                  AND rev_rec_end_date <= DATE_ADD(CURRENT_DATE(), 90)
                                 GROUP BY ACCOUNT_ID
                             )
                         """)
@@ -2988,8 +2988,8 @@ class DatabricksService:
                                 REVENUE_TYPE,
                                 CONTRACT_GROUP,
                                 REV_REC_END_DATE,
-                                DATEDIFF(TRY_CAST(REV_REC_END_DATE AS DATE), CURRENT_DATE()) AS renewal_days,
-                                TRY_CAST(REGEXP_REPLACE(ARR_CAD, '[^0-9.-]', '') AS DOUBLE) AS arr_cad
+                                DATEDIFF(REV_REC_END_DATE, CURRENT_DATE()) AS renewal_days,
+                                COALESCE(ARR_CAD, 0) AS arr_cad
                             FROM {FCT_TABLE}
                             WHERE RENEWAL_NOT_YET_CONTRACTED = 'Y'
                               AND ACCOUNT_ID IN ({ids_in})
@@ -3213,7 +3213,7 @@ class DatabricksService:
 
     def get_account_by_id(self, account_id: str) -> Optional[AccountDetail]:
         """Get detailed account information."""
-        FCT_TABLE = "silver.silver_layer.fct_contracts"
+        FCT_TABLE = FCT_CONTRACTS_TABLE
         with self.get_connection() as conn:
             if conn is None:
                 raise Exception("Database connection failed — cannot load account detail")
@@ -3235,13 +3235,13 @@ class DatabricksService:
                         SELECT 
                             account_id,
                             SUM(ARR_EUR) as total_arr,
-                            MIN(TRY_CAST(rev_rec_end_date AS DATE)) as nearest_renewal_date,
-                            MIN(DATEDIFF(TRY_CAST(rev_rec_end_date AS DATE), CURRENT_DATE())) as renewal_days
+                            MIN(rev_rec_end_date) as nearest_renewal_date,
+                            MIN(DATEDIFF(rev_rec_end_date, CURRENT_DATE())) as renewal_days
                         FROM {FCT_TABLE}
                         WHERE RENEWAL_NOT_YET_CONTRACTED = 'Y'
                           AND revenue_type NOT IN ('Services', 'Perpetual')
-                          AND churn_expected_occurred = 'nan'
-                          AND TRY_CAST(rev_rec_end_date AS DATE) > CURRENT_DATE()
+                          AND (churn_expected_occurred IS NULL OR churn_expected_occurred = 'nan')
+                          AND rev_rec_end_date > CURRENT_DATE()
                         GROUP BY account_id
                     ) arr_data ON c.account_id = arr_data.account_id
                     WHERE c.account_id = ?
@@ -3705,7 +3705,7 @@ class DatabricksService:
 
     def _fetch_contract_context(self, account_detail: AccountDetail) -> ContractContext:
         """Fetch real contract data from fct_contracts for this account."""
-        FCT_TABLE = "silver.silver_layer.fct_contracts"
+        FCT_TABLE = FCT_CONTRACTS_TABLE
         account_id = account_detail.id
         logger.info(f"_fetch_contract_context: account_id={account_id}")
 
@@ -3722,10 +3722,10 @@ class DatabricksService:
                         c.CONTRACT_GROUP,
                         c.REVENUE_TYPE,
                         c.CURRENCY,
-                        COALESCE(SUM(TRY_CAST(c.ARR_CONTRACT_CURRENCY AS DOUBLE)), 0) AS arr_native,
-                        COALESCE(SUM(TRY_CAST(c.ARR_CAD AS DOUBLE)), 0) AS arr_cad,
-                        COALESCE(SUM(TRY_CAST(c.BOOKING_TCV_ALLOCATED_CONTRACT_CURRENCY AS DOUBLE)), 0) AS tcv_native,
-                        COALESCE(SUM(TRY_CAST(c.BOOKING_TCV_CAD AS DOUBLE)), 0) AS tcv_cad,
+                        COALESCE(SUM(c.ARR_CONTRACT_CURRENCY), 0) AS arr_native,
+                        COALESCE(SUM(c.ARR_CAD), 0) AS arr_cad,
+                        COALESCE(SUM(c.BOOKING_TCV_ALLOCATED_CONTRACT_CURRENCY), 0) AS tcv_native,
+                        COALESCE(SUM(c.BOOKING_TCV_CAD), 0) AS tcv_cad,
                         MIN(c.REV_REC_START_DATE) AS contract_start,
                         MAX(c.REV_REC_END_DATE) AS contract_end,
                         MAX(CASE WHEN c.RENEWAL_NOT_YET_CONTRACTED = 'Y' THEN 1 ELSE 0 END) AS is_active_renewal
@@ -6066,7 +6066,7 @@ class DatabricksService:
     def get_csm_stats(self, account_type: Optional[str] = None) -> CSMStats:
         """Get CSM management dashboard statistics."""
         logger.info(f"get_csm_stats called, account_type={account_type}")
-        FCT_TABLE = "silver.silver_layer.fct_contracts"
+        FCT_TABLE = FCT_CONTRACTS_TABLE
         with self.get_connection() as conn:
             if conn is None:
                 logger.warning("Connection is None, returning empty CSM stats")
@@ -6106,8 +6106,8 @@ class DatabricksService:
                     WHERE c._fivetran_deleted = false
                       AND f.RENEWAL_NOT_YET_CONTRACTED = 'Y'
                       AND f.revenue_type NOT IN ('Services', 'Perpetual')
-                      AND f.churn_expected_occurred = 'nan'
-                      AND TRY_CAST(f.rev_rec_end_date AS DATE) > CURRENT_DATE()
+                      AND (f.churn_expected_occurred IS NULL OR f.churn_expected_occurred = 'nan')
+                      AND f.rev_rec_end_date > CURRENT_DATE()
                 """)
                 arr_row = cursor.fetchone()
                 total_arr = float(arr_row[0]) if arr_row and arr_row[0] else 0.0
@@ -6834,7 +6834,7 @@ class DatabricksService:
             account_type: Filter accounts by type (Customer, Prospect, etc.). None returns all.
         """
         logger.info(f"get_csms called with status={status}, account_type={account_type}")
-        FCT_TABLE = "silver.silver_layer.fct_contracts"
+        FCT_TABLE = FCT_CONTRACTS_TABLE
         with self.get_connection() as conn:
             if conn is None:
                 logger.warning("Connection is None, returning empty CSM list")
@@ -6854,9 +6854,9 @@ class DatabricksService:
                         COUNT(DISTINCT c.account_id) as account_count,
                         COALESCE(SUM(f.ARR_EUR), 0) as total_arr,
                         COUNT(DISTINCT CASE 
-                            WHEN TRY_CAST(f.rev_rec_end_date AS DATE) IS NOT NULL 
-                                AND TRY_CAST(f.rev_rec_end_date AS DATE) <= DATE_ADD(CURRENT_DATE(), 90)
-                                AND TRY_CAST(f.rev_rec_end_date AS DATE) >= CURRENT_DATE()
+                            WHEN f.rev_rec_end_date IS NOT NULL 
+                                AND f.rev_rec_end_date <= DATE_ADD(CURRENT_DATE(), 90)
+                                AND f.rev_rec_end_date >= CURRENT_DATE()
                             THEN c.account_id 
                         END) as at_risk_count
                     FROM {DIM_USERS_TABLE} u
@@ -6864,8 +6864,8 @@ class DatabricksService:
                     LEFT JOIN {FCT_TABLE} f ON c.account_id = f.account_id 
                         AND f.RENEWAL_NOT_YET_CONTRACTED = 'Y'
                         AND f.revenue_type NOT IN ('Services', 'Perpetual')
-                        AND f.churn_expected_occurred = 'nan'
-                        AND TRY_CAST(f.rev_rec_end_date AS DATE) > CURRENT_DATE()
+                        AND (f.churn_expected_occurred IS NULL OR f.churn_expected_occurred = 'nan')
+                        AND f.rev_rec_end_date > CURRENT_DATE()
                     GROUP BY u.id, u.name, u.email
                     ORDER BY account_count DESC
                 """)
@@ -6913,7 +6913,7 @@ class DatabricksService:
                 cursor = conn.cursor()
 
                 # Base query with fct_contracts for ARR and renewal dates
-                FCT_TABLE = "silver.silver_layer.fct_contracts"
+                FCT_TABLE = FCT_CONTRACTS_TABLE
                 base_query = f"""
                     SELECT 
                         c.account_id,
@@ -6923,9 +6923,9 @@ class DatabricksService:
                         u.name as csm_name,
                         COALESCE(arr_data.total_arr, 0) as arr,
                         r_saas.max_end_date AS saas_renewal_date,
-                        DATEDIFF(TRY_CAST(r_saas.max_end_date AS DATE), CURRENT_DATE()) AS saas_renewal_days,
+                        DATEDIFF(r_saas.max_end_date, CURRENT_DATE()) AS saas_renewal_days,
                         r_esma.max_end_date AS esma_renewal_date,
-                        DATEDIFF(TRY_CAST(r_esma.max_end_date AS DATE), CURRENT_DATE()) AS esma_renewal_days
+                        DATEDIFF(r_esma.max_end_date, CURRENT_DATE()) AS esma_renewal_days
                     FROM {DIM_CUSTOMERS_TABLE} c
                     LEFT JOIN {DIM_USERS_TABLE} u ON c.csm_c = u.id
                     LEFT JOIN (
@@ -6933,8 +6933,8 @@ class DatabricksService:
                         FROM {FCT_TABLE}
                         WHERE RENEWAL_NOT_YET_CONTRACTED = 'Y'
                           AND revenue_type NOT IN ('Services', 'Perpetual')
-                          AND churn_expected_occurred = 'nan'
-                          AND TRY_CAST(rev_rec_end_date AS DATE) > CURRENT_DATE()
+                          AND (churn_expected_occurred IS NULL OR churn_expected_occurred = 'nan')
+                          AND rev_rec_end_date > CURRENT_DATE()
                         GROUP BY account_id
                     ) arr_data ON c.account_id = arr_data.account_id
                     LEFT JOIN (
@@ -7070,7 +7070,7 @@ class DatabricksService:
         """Get ARR analysis data from FCT_CONTRACT table joined with dim_customers for industry."""
         logger.info(f"get_arr_analysis called: page={page}, revenue_type={revenue_type}, region={region}, account_type={account_type}")
         
-        FCT_CONTRACT_TABLE = "silver.silver_layer.fct_contracts"
+        FCT_CONTRACT_TABLE = FCT_CONTRACTS_TABLE
         DIM_CUSTOMER_TABLE = "silver.silver_layer.dim_customers"
         
         with self.get_connection() as conn:
@@ -7084,9 +7084,9 @@ class DatabricksService:
             base_where = f"""
                 c.RENEWAL_NOT_YET_CONTRACTED = 'Y'
                 AND c.revenue_type NOT IN ('Services', 'Perpetual')
-                AND c.churn_expected_occurred = 'nan'
-                AND TRY_CAST(c.rev_rec_end_date AS DATE) > CURRENT_DATE()
-                AND TRY_CAST(c.rev_rec_end_date AS DATE) <= DATE_ADD(CURRENT_DATE(), {int(renewal_period)})
+                AND (c.churn_expected_occurred IS NULL OR c.churn_expected_occurred = 'nan')
+                AND c.rev_rec_end_date > CURRENT_DATE()
+                AND c.rev_rec_end_date <= DATE_ADD(CURRENT_DATE(), {int(renewal_period)})
             """
             
             # Add account_type filter if specified
@@ -7122,7 +7122,7 @@ class DatabricksService:
                 LEFT JOIN {DIM_CUSTOMER_TABLE} dc ON c.account_id = dc.account_id
                 WHERE {base_where}
                   AND dc._fivetran_deleted = false
-                  AND TRY_CAST(c.rev_rec_end_date AS DATE) <= DATE_ADD(CURRENT_DATE(), 90)
+                  AND c.rev_rec_end_date <= DATE_ADD(CURRENT_DATE(), 90)
             """
             cursor.execute(renewals_query)
             renewals_row = cursor.fetchone()
@@ -7206,9 +7206,9 @@ class DatabricksService:
                 "f.account != ''",
                 "f.RENEWAL_NOT_YET_CONTRACTED = 'Y'",
                 "f.revenue_type NOT IN ('Services', 'Perpetual')",
-                "f.churn_expected_occurred = 'nan'",
-                "TRY_CAST(f.rev_rec_end_date AS DATE) > CURRENT_DATE()",
-                f"TRY_CAST(f.rev_rec_end_date AS DATE) <= DATE_ADD(CURRENT_DATE(), {int(renewal_period)})",
+                "(f.churn_expected_occurred IS NULL OR f.churn_expected_occurred = 'nan')",
+                "f.rev_rec_end_date > CURRENT_DATE()",
+                f"f.rev_rec_end_date <= DATE_ADD(CURRENT_DATE(), {int(renewal_period)})",
             ]
             params = []
             
@@ -7289,10 +7289,10 @@ class DatabricksService:
                         contract_group,
                         revenue_type,
                         currency,
-                        SUM(COALESCE(TRY_CAST(arr_contract_currency AS DOUBLE), 0)) as arr_native,
-                        SUM(COALESCE(TRY_CAST(arr_cad AS DOUBLE), 0)) as arr_cad,
-                        SUM(COALESCE(TRY_CAST(booking_tcv_allocated_contract_currency AS DOUBLE), 0)) as tcv_native,
-                        SUM(COALESCE(TRY_CAST(booking_tcv_cad AS DOUBLE), 0)) as tcv_cad,
+                        SUM(COALESCE(arr_contract_currency, 0)) as arr_native,
+                        SUM(COALESCE(arr_cad, 0)) as arr_cad,
+                        SUM(COALESCE(booking_tcv_allocated_contract_currency, 0)) as tcv_native,
+                        SUM(COALESCE(booking_tcv_cad, 0)) as tcv_cad,
                         MIN(`start`) as contract_start,
                         MAX(`end`) as contract_end,
                         COUNT(*) as pob_count
@@ -7300,9 +7300,9 @@ class DatabricksService:
                     WHERE account IN ({placeholders})
                     AND renewal_not_yet_contracted = 'Y'
                     AND revenue_type NOT IN ('Services', 'Perpetual')
-                    AND churn_expected_occurred = 'nan'
-                    AND TRY_CAST(rev_rec_end_date AS DATE) > CURRENT_DATE()
-                    AND TRY_CAST(rev_rec_end_date AS DATE) <= DATE_ADD(CURRENT_DATE(), {int(renewal_period)})
+                    AND (churn_expected_occurred IS NULL OR churn_expected_occurred = 'nan')
+                    AND rev_rec_end_date > CURRENT_DATE()
+                    AND rev_rec_end_date <= DATE_ADD(CURRENT_DATE(), {int(renewal_period)})
                     GROUP BY account, contract_group, revenue_type, currency
                     ORDER BY account, 6 DESC
                 """
@@ -7428,7 +7428,7 @@ class DatabricksService:
         """Get detailed ARR data for a specific customer."""
         logger.info(f"get_arr_customer_detail called for account: {account}")
         
-        FCT_CONTRACT_TABLE = "silver.silver_layer.fct_contracts"
+        FCT_CONTRACT_TABLE = FCT_CONTRACTS_TABLE
         
         with self.get_connection() as conn:
             if conn is None:
@@ -7442,15 +7442,15 @@ class DatabricksService:
                     contract_group,
                     revenue_type,
                     currency,
-                    SUM(COALESCE(CAST(arr_contract_currency AS DOUBLE), 0)) as arr_native,
-                    SUM(COALESCE(CAST(arr_cad AS DOUBLE), 0)) as arr_cad,
-                    SUM(COALESCE(CAST(booking_tcv_allocated_contract_currency AS DOUBLE), 0)) as tcv_native,
-                    SUM(COALESCE(CAST(booking_tcv_cad AS DOUBLE), 0)) as tcv_cad,
-                    SUM(COALESCE(CAST(acv_contract_currency AS DOUBLE), 0)) as acv_native,
-                    SUM(COALESCE(CAST(acv_cad AS DOUBLE), 0)) as acv_cad,
+                    SUM(COALESCE(arr_contract_currency, 0)) as arr_native,
+                    SUM(COALESCE(arr_cad, 0)) as arr_cad,
+                    SUM(COALESCE(booking_tcv_allocated_contract_currency, 0)) as tcv_native,
+                    SUM(COALESCE(booking_tcv_cad, 0)) as tcv_cad,
+                    SUM(COALESCE(acv_contract_currency, 0)) as acv_native,
+                    SUM(COALESCE(acv_cad, 0)) as acv_cad,
                     MIN(`start`) as contract_start,
                     MAX(`end`) as contract_end,
-                    AVG(COALESCE(CAST(of_years AS DOUBLE), 0)) as contract_years,
+                    AVG(COALESCE(TRY_CAST(of_years_months AS DOUBLE), 0)) / 12 as contract_years,
                     COUNT(*) as pob_count
                 FROM {FCT_CONTRACT_TABLE}
                 WHERE account = ?
