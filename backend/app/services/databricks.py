@@ -2270,24 +2270,15 @@ class DatabricksService:
                 if account_type:
                     fct_where += f"\n                    AND dc.account_type = '{safe_type}'"
 
-                if account_type:
-                    renewal_query = f"""
-                        SELECT
-                            COALESCE(ROUND(SUM(c.arr_cumulative_eur), 0), 0) AS renewals_arr_eur,
-                            COUNT(DISTINCT c.account_id) AS renewals_count
-                        FROM {FCT_TABLE} c
-                        JOIN {DIM_CUSTOMERS_TABLE} dc
-                            ON c.account_id = dc.account_id AND dc._fivetran_deleted = false
-                        WHERE {fct_where}
-                    """
-                else:
-                    renewal_query = f"""
-                        SELECT
-                            COALESCE(ROUND(SUM(c.arr_cumulative_eur), 0), 0) AS renewals_arr_eur,
-                            COUNT(DISTINCT c.account_id) AS renewals_count
-                        FROM {FCT_TABLE} c
-                        WHERE {fct_where}
-                    """
+                renewal_query = f"""
+                    SELECT
+                        COALESCE(ROUND(SUM(c.arr_cumulative_eur), 0), 0) AS renewals_arr_eur,
+                        COUNT(DISTINCT c.account_id) AS renewals_count
+                    FROM {FCT_TABLE} c
+                    JOIN {DIM_CUSTOMERS_TABLE} dc
+                        ON c.account_id = dc.account_id AND dc._fivetran_deleted = false
+                    WHERE {fct_where}
+                """
                 logger.info(f"Executing renewal query with period={renewal_period}")
                 cursor.execute(renewal_query)
                 ren_row = cursor.fetchone()
@@ -2307,24 +2298,15 @@ class DatabricksService:
                 if account_type:
                     overdue_where += f"\n                    AND dc.account_type = '{safe_type}'"
 
-                if account_type:
-                    overdue_query = f"""
-                        SELECT
-                            COALESCE(ROUND(SUM(c.arr_cumulative_eur), 0), 0) AS overdue_arr_eur,
-                            COUNT(DISTINCT c.account_id) AS overdue_count
-                        FROM {FCT_TABLE} c
-                        JOIN {DIM_CUSTOMERS_TABLE} dc
-                            ON c.account_id = dc.account_id AND dc._fivetran_deleted = false
-                        WHERE {overdue_where}
-                    """
-                else:
-                    overdue_query = f"""
-                        SELECT
-                            COALESCE(ROUND(SUM(c.arr_cumulative_eur), 0), 0) AS overdue_arr_eur,
-                            COUNT(DISTINCT c.account_id) AS overdue_count
-                        FROM {FCT_TABLE} c
-                        WHERE {overdue_where}
-                    """
+                overdue_query = f"""
+                    SELECT
+                        COALESCE(ROUND(SUM(c.arr_cumulative_eur), 0), 0) AS overdue_arr_eur,
+                        COUNT(DISTINCT c.account_id) AS overdue_count
+                    FROM {FCT_TABLE} c
+                    JOIN {DIM_CUSTOMERS_TABLE} dc
+                        ON c.account_id = dc.account_id AND dc._fivetran_deleted = false
+                    WHERE {overdue_where}
+                """
                 logger.info("Executing overdue renewals query")
                 cursor.execute(overdue_query)
                 overdue_row = cursor.fetchone()
@@ -2343,20 +2325,13 @@ class DatabricksService:
                 if account_type:
                     arr_where += f"\n                    AND dc.account_type = '{safe_type}'"
 
-                if account_type:
-                    arr_query = f"""
-                        SELECT COALESCE(ROUND(SUM(c.arr_cumulative_eur), 0), 0) AS portfolio_arr_eur
-                        FROM {FCT_TABLE} c
-                        JOIN {DIM_CUSTOMERS_TABLE} dc
-                            ON c.account_id = dc.account_id AND dc._fivetran_deleted = false
-                        WHERE {arr_where}
-                    """
-                else:
-                    arr_query = f"""
-                        SELECT COALESCE(ROUND(SUM(c.arr_cumulative_eur), 0), 0) AS portfolio_arr_eur
-                        FROM {FCT_TABLE} c
-                        WHERE {arr_where}
-                    """
+                arr_query = f"""
+                    SELECT COALESCE(ROUND(SUM(c.arr_cumulative_eur), 0), 0) AS portfolio_arr_eur
+                    FROM {FCT_TABLE} c
+                    JOIN {DIM_CUSTOMERS_TABLE} dc
+                        ON c.account_id = dc.account_id AND dc._fivetran_deleted = false
+                    WHERE {arr_where}
+                """
                 logger.info("Executing portfolio ARR query (EUR, current year)")
                 cursor.execute(arr_query)
                 arr_row = cursor.fetchone()
@@ -7235,7 +7210,7 @@ class DatabricksService:
 
             # Common WHERE for all top-section queries (Finance-approved logic)
             # Uses `end` column per governance SQL (contract end date, M/d/yyyy string)
-            _dc_join = f"LEFT JOIN (SELECT * FROM {DIM_CUSTOMER_TABLE} WHERE _fivetran_deleted = false) dc ON c.account_id = dc.account_id"
+            _dc_join = f"JOIN (SELECT * FROM {DIM_CUSTOMER_TABLE} WHERE _fivetran_deleted = false) dc ON c.account_id = dc.account_id"
             base_where = f"""
                 c.RENEWAL_NOT_YET_CONTRACTED = 'Y'
                 AND c.revenue_type NOT IN {EXCLUDED_REVENUE_TYPES_SQL}
@@ -7409,23 +7384,19 @@ class DatabricksService:
             where_clause = " AND ".join(where_conditions)
 
             _rd = "f.contract_end_date"
-            _dc_join_f = f"LEFT JOIN (SELECT * FROM {DIM_CUSTOMER_TABLE} WHERE _fivetran_deleted = false) dc ON f.ACCOUNT_ID = dc.account_id"
+            # Row ARR / TCV / ACV / contract count cover renewals in the selected window only;
+            # overdue renewals are reported separately (overdue_arr_eur badge), not added to ARR.
+            _up = f"{_rd} > CURRENT_DATE() AND {_rd} <= DATE_ADD(CURRENT_DATE(), {int(renewal_period)})"
+            _dc_join_f = f"JOIN (SELECT * FROM {DIM_CUSTOMER_TABLE} WHERE _fivetran_deleted = false) dc ON f.ACCOUNT_ID = dc.account_id"
 
             # Get total customer count first
             logger.info("Counting customers...")
-            if account_type:
-                count_query = f"""
-                    SELECT COUNT(DISTINCT f.account) 
-                    FROM {FCT_CONTRACT_TABLE} f
-                    {_dc_join_f}
-                    WHERE {where_clause}
-                """
-            else:
-                count_query = f"""
-                    SELECT COUNT(DISTINCT f.account) 
-                    FROM {FCT_CONTRACT_TABLE} f
-                    WHERE {where_clause}
-                """
+            count_query = f"""
+                SELECT COUNT(DISTINCT f.account) 
+                FROM {FCT_CONTRACT_TABLE} f
+                {_dc_join_f}
+                WHERE {where_clause}
+            """
             cursor.execute(count_query, params)
             total_customers = cursor.fetchone()[0]
             logger.info(f"Total customers: {total_customers}")
@@ -7439,10 +7410,10 @@ class DatabricksService:
                     MAX(f.ACCOUNT_ID) as account_id,
                     MAX(dc.region) as region,
                     MAX(dc.industry) as industry,
-                    COALESCE(ROUND(SUM(f.arr_cumulative_eur), 0), 0) as total_arr_eur,
-                    COALESCE(ROUND(SUM(f.BOOKING_TCV_CAD), 0), 0) as total_tcv_cad,
-                    COALESCE(ROUND(SUM(f.ARR_CONTRACT_CURRENCY), 0), 0) as total_acv_native,
-                    COUNT(DISTINCT f.contract_group) as contract_count,
+                    COALESCE(ROUND(SUM(CASE WHEN {_up} THEN f.arr_cumulative_eur END), 0), 0) as total_arr_eur,
+                    COALESCE(ROUND(SUM(CASE WHEN {_up} THEN f.BOOKING_TCV_CAD END), 0), 0) as total_tcv_cad,
+                    COALESCE(ROUND(SUM(CASE WHEN {_up} THEN f.ARR_CONTRACT_CURRENCY END), 0), 0) as total_acv_native,
+                    COUNT(DISTINCT CASE WHEN {_up} THEN f.contract_group END) as contract_count,
                     MAX(f.currency) as primary_currency,
                     COALESCE(ROUND(SUM(
                         CASE WHEN {_rd} >= DATE_ADD(CURRENT_DATE(), -360)
