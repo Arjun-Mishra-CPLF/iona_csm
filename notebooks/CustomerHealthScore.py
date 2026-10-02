@@ -8,6 +8,33 @@ from pyspark.sql.types import IntegerType, StringType, DoubleType
 from datetime import date
 
 # ═══════════════════════════════════════════════════════════════
+# Contracts as the IONA app reads them (same as FCT_CONTRACTS_SOURCE in
+# backend/app/services/databricks.py):
+# - ACCOUNT_ID: exact, unambiguous dim_customers name match when missing
+# - contract_end_date: renewal date = contract term end (`end`), not the
+#   line's rev_rec_end_date (Term Licenses renew with their SMA term;
+#   year-N lines of multi-year deals are not renewals)
+# - is_churned: only 'Y' counts; 'Expected' is an at-risk renewal still due
+# ═══════════════════════════════════════════════════════════════
+
+spark.sql("""
+    CREATE OR REPLACE TEMP VIEW fct_contracts_app AS
+    SELECT fct_src.* EXCEPT (ACCOUNT_ID),
+           COALESCE(fct_src.ACCOUNT_ID, name_match.matched_account_id) AS ACCOUNT_ID,
+           COALESCE(TRY_CAST(fct_src.`end` AS DATE), fct_src.rev_rec_end_date) AS contract_end_date,
+           COALESCE(UPPER(TRIM(fct_src.churn_expected_occurred)), '') = 'Y' AS is_churned
+    FROM silver.silver_layer.fct_contracts fct_src
+    LEFT JOIN (
+        SELECT account, MIN(account_id) AS matched_account_id
+        FROM silver.silver_layer.dim_customers
+        WHERE _fivetran_deleted = false
+        GROUP BY account
+        HAVING COUNT(DISTINCT account_id) = 1
+    ) name_match
+      ON fct_src.ACCOUNT_ID IS NULL AND fct_src.account = name_match.account
+""")
+
+# ═══════════════════════════════════════════════════════════════
 # STEP 1: Get all accounts with renewal days
 # FIXED: Removed strict filters to match web app logic
 # ═══════════════════════════════════════════════════════════════
@@ -19,23 +46,23 @@ accounts_df = spark.sql("""
         MIN(
             CASE
                 WHEN fct.RENEWAL_NOT_YET_CONTRACTED = 'Y'
-                    AND fct.rev_rec_end_date IS NOT NULL
-                THEN DATEDIFF(TRY_CAST(fct.REV_REC_END_DATE AS DATE), CURRENT_DATE())
+                    AND fct.contract_end_date IS NOT NULL
+                THEN DATEDIFF(fct.contract_end_date, CURRENT_DATE())
                 ELSE 9999
             END
         ) as renewal_days
     FROM silver.silver_layer.dim_customers c
-    LEFT JOIN silver.silver_layer.fct_contracts fct ON c.account_id = fct.account_id
+    LEFT JOIN fct_contracts_app fct ON c.account_id = fct.account_id
     WHERE c._fivetran_deleted = false
       AND COALESCE(c.account_type, '') != 'Churn'
       AND c.account_id NOT IN (
           SELECT fc.account_id
-          FROM silver.silver_layer.fct_contracts fc
+          FROM fct_contracts_app fc
           WHERE fc.account_id IS NOT NULL
           GROUP BY fc.account_id
           HAVING COUNT(*) = SUM(
               CASE WHEN fc.renewal_not_yet_contracted = 'Y'
-                    AND fc.churn_expected_occurred = 'Y'
+                    AND fc.is_churned
               THEN 1 ELSE 0 END
           )
       )
@@ -58,11 +85,11 @@ arr_df = spark.sql("""
     WITH contract_lines AS (
         SELECT
             account_id,
-            DATEDIFF(TRY_CAST(REV_REC_END_DATE AS DATE), CURRENT_DATE()) AS days_to_renewal,
-            COALESCE(TRY_CAST(arr_cumulative_eur AS DOUBLE), 0) AS line_arr
-        FROM silver.silver_layer.fct_contracts
+            DATEDIFF(contract_end_date, CURRENT_DATE()) AS days_to_renewal,
+            COALESCE(arr_cumulative_eur, 0) AS line_arr
+        FROM fct_contracts_app
         WHERE RENEWAL_NOT_YET_CONTRACTED = 'Y'
-          AND rev_rec_end_date IS NOT NULL
+          AND contract_end_date IS NOT NULL
     ),
     account_totals AS (
         SELECT
