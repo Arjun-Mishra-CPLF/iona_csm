@@ -12,6 +12,13 @@ resources:
           sql_warehouse:
             id: e0f7c35bbfc5d9cd
             permission: CAN_USE
+        # Added to the app outside the bundle; declared here so `bundle deploy`
+        # doesn't strip it and break email notifications.
+        - name: sendgrid-api-key
+          secret:
+            scope: iona
+            key: SENDGRID_API_KEY
+            permission: READ
 
 targets:
   prod:

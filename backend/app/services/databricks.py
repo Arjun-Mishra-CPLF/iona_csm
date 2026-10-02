@@ -3919,6 +3919,8 @@ class DatabricksService:
 
     def _fetch_luminance_documents(self, account_name: str) -> list[LuminanceDocument]:
         """Fetch Luminance contract documents linked to this account."""
+        from urllib.parse import unquote
+
         LUMINANCE_TABLE = "silver.silver_layer.dim_luminance_account"
         DIM_CUSTOMERS = "silver.silver_layer.dim_customers"
         try:
@@ -3933,7 +3935,7 @@ class DatabricksService:
                         dla.name,
                         dla.url,
                         dla.state,
-                        dla.document_type
+                        dla.contract_type AS document_type
                     FROM {LUMINANCE_TABLE} dla
                     INNER JOIN {DIM_CUSTOMERS} dc
                         ON dc.account = dla.matched_account_name
@@ -3950,7 +3952,7 @@ class DatabricksService:
                         title=str(row[1] or "Untitled"),
                         url=str(row[2]),
                         state=str(row[3] or "import_complete"),
-                        document_type=str(row[4]) if row[4] else None,
+                        document_type=unquote(str(row[4])) if row[4] else None,  # stored URL-encoded
                     )
                     for row in rows
                 ]
