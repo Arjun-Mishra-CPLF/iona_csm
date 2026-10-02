@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+
+{% block title %}SendGrid Integration Test — Iona CSM{% endblock %}
+
+{% block content %}
+<p class="content-title">&#x2705; SendGrid Integration Test</p>
+<p class="content-subtitle">Sent at {{ sent_at }}</p>
+
+<div class="card">
+  <p class="card-title">Configuration</p>
+  <p class="card-text">
+    <strong>From:</strong> {{ from_email }}<br />
+    <strong>To:</strong> {{ to_email }}<br />
+    <strong>Environment:</strong> {{ environment }}
+  </p>
+</div>
+
+<div class="card">
+  <p class="card-title">Status</p>
+  <p class="card-text">
+    If you received this email, your SendGrid integration is working correctly.
+    The Iona CSM notification system is ready to send weekly summaries and daily change alerts.
+  </p>
+</div>
+
+<div class="card" style="border-color:#93c5fd;">
+  <p class="card-title" style="color:#1e40af;">Key Reminder</p>
+  <p class="card-text">
+    The SendGrid API key expires on <strong>2026-07-03</strong>.
+    Raise a renewal incident at least 2 weeks before that date.
+  </p>
+</div>
+{% endblock %}

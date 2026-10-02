@@ -1,0 +1,156 @@
+{% extends "base.html" %}
+{% from '_email_health_macros.html' import health_badge, health_color, health_tint, health_border %}
+
+{% block title %}Weekly Department Digest — {{ week_start }}{% endblock %}
+
+{% block content %}
+<!-- Title -->
+<p class="content-title">Weekly Account Digest</p>
+<p class="content-subtitle">
+  {{ week_start }} – {{ week_end }}
+  &nbsp;·&nbsp; {{ total_accounts }} account{{ 's' if total_accounts != 1 else '' }}
+  across {{ departments | length }} department{{ 's' if departments | length != 1 else '' }}
+  {% if test_mode %}&nbsp;·&nbsp; <span style="color:#3b9eff;">[TEST MODE]</span>{% endif %}
+</p>
+
+<!-- Top-level health KPIs -->
+<div class="kpi-row" style="margin-bottom:24px;">
+  <div class="kpi-cell">
+    <div class="kpi-value">{{ total_accounts }}</div>
+    <div class="kpi-label">Total Accounts</div>
+  </div>
+  <div class="kpi-cell">
+    <div class="kpi-value" style="color:#10b981;">{{ good_count }}</div>
+    <div class="kpi-label" style="color:#065f46; font-weight:600;">Healthy</div>
+  </div>
+  <div class="kpi-cell">
+    <div class="kpi-value" style="color:#d97706;">{{ at_risk_count }}</div>
+    <div class="kpi-label" style="color:#92400e; font-weight:600;">At Risk</div>
+  </div>
+  <div class="kpi-cell">
+    <div class="kpi-value" style="color:#dc2626;">{{ critical_count }}</div>
+    <div class="kpi-label" style="color:#991b1b; font-weight:600;">Critical</div>
+  </div>
+</div>
+
+<hr class="section-divider" />
+
+<!-- Departments -->
+{% for dept in departments %}
+
+{#-- Compute worst health category for this department's left stripe --#}
+{% set ns = namespace(worst='Good') %}
+{% for acct in dept.accounts %}
+  {% if acct.health_category != 'Good' and acct.health_category != 'At Risk' %}
+    {% set ns.worst = 'Critical' %}
+  {% elif acct.health_category == 'At Risk' and ns.worst == 'Good' %}
+    {% set ns.worst = 'At Risk' %}
+  {% endif %}
+{% endfor %}
+
+<!-- Department heading: light neutral bg + 6px left stripe from worst health -->
+<table width="100%" cellpadding="0" cellspacing="0" role="presentation"
+       style="margin-bottom:6px; border-radius:4px; overflow:hidden;">
+  <tr>
+    <!-- Left accent stripe -->
+    <td width="6" bgcolor="{{ health_border(ns.worst) }}"
+        style="background-color:{{ health_border(ns.worst) }}; width:6px; padding:0; font-size:1px; line-height:1px;">&nbsp;</td>
+    <!-- Header content -->
+    <td bgcolor="#f1f5f9" style="padding:10px 14px; background-color:#f1f5f9;">
+      <table width="100%" cellpadding="0" cellspacing="0" role="presentation">
+        <tr>
+          <td style="vertical-align:middle;">
+            <span style="font-size:13px; font-weight:700; color:#1a2b4a; text-transform:uppercase; letter-spacing:0.6px;">
+              {{ dept.name }}
+            </span>
+            <span style="font-size:11px; color:#64748b; margin-left:8px;">
+              {{ dept.accounts | length }} account{{ 's' if dept.accounts | length != 1 else '' }}
+            </span>
+          </td>
+          <td style="text-align:right; vertical-align:middle; white-space:nowrap;">
+            {#-- Mini KPI summary for this department --#}
+            {% set d_good = dept.accounts | selectattr('health_category', 'equalto', 'Good') | list | length %}
+            {% set d_risk = dept.accounts | selectattr('health_category', 'equalto', 'At Risk') | list | length %}
+            {% set d_crit = dept.accounts | rejectattr('health_category', 'in', ['Good', 'At Risk']) | list | length %}
+            {% if d_good > 0 %}
+            <span style="display:inline-block; margin-left:6px; font-size:11px; font-weight:700; color:#065f46; background-color:#d1fae5; border-radius:10px; padding:1px 8px;">
+              {{ d_good }} Good
+            </span>
+            {% endif %}
+            {% if d_risk > 0 %}
+            <span style="display:inline-block; margin-left:4px; font-size:11px; font-weight:700; color:#92400e; background-color:#fef3c7; border-radius:10px; padding:1px 8px;">
+              {{ d_risk }} At Risk
+            </span>
+            {% endif %}
+            {% if d_crit > 0 %}
+            <span style="display:inline-block; margin-left:4px; font-size:11px; font-weight:700; color:#991b1b; background-color:#fee2e2; border-radius:10px; padding:1px 8px;">
+              {{ d_crit }} Critical
+            </span>
+            {% endif %}
+          </td>
+        </tr>
+      </table>
+    </td>
+  </tr>
+</table>
+
+<!-- Accounts table for this department -->
+<table width="100%" cellpadding="0" cellspacing="0" role="presentation"
+       style="border:1px solid #e2e8f0; border-radius:4px; margin-bottom:24px; font-size:13px;">
+  <tr style="background-color:#f8fafc;">
+    <td style="padding:7px 12px; font-weight:600; color:#475569; width:40%;">Account</td>
+    <td style="padding:7px 12px; font-weight:600; color:#475569; width:16%; text-align:center;">Health</td>
+    <td style="padding:7px 12px; font-weight:600; color:#475569; width:13%; text-align:center;">Score</td>
+    <td style="padding:7px 12px; font-weight:600; color:#475569; width:16%; text-align:center;">ARR</td>
+    <td style="padding:7px 12px; font-weight:600; color:#475569; width:15%; text-align:center;">Renewal</td>
+  </tr>
+  {% for acct in dept.accounts %}
+  <!-- Metrics row: tinted by account health; bgcolor for Outlook -->
+  <tr bgcolor="{{ health_tint(acct.health_category) }}"
+      style="border-top:1px solid #e2e8f0; background-color:{{ health_tint(acct.health_category) }};">
+    <td style="padding:10px 12px; color:#1a2b4a; font-weight:600; background-color:{{ health_tint(acct.health_category) }}; border-left:3px solid {{ health_border(acct.health_category) }};">
+      {{ acct.account_name }}
+      {% if acct.csm_name and acct.csm_name != 'Unassigned' %}
+      <div style="font-size:11px; color:#64748b; font-weight:400; margin-top:1px;">{{ acct.csm_name }}</div>
+      {% endif %}
+    </td>
+    <td style="padding:10px 12px; text-align:center; background-color:{{ health_tint(acct.health_category) }};">
+      {{ health_badge(acct.health_category) }}
+    </td>
+    <td style="padding:10px 12px; text-align:center; font-weight:700; font-size:16px; background-color:{{ health_tint(acct.health_category) }}; color:{{ health_color(acct.health_category) }};">
+      {{ acct.health_score }}
+    </td>
+    <td style="padding:10px 12px; text-align:center; color:#1e293b; background-color:{{ health_tint(acct.health_category) }};">
+      {% if acct.total_arr %}${{ "{:,.0f}".format(acct.total_arr) }}{% else %}&mdash;{% endif %}
+    </td>
+    <td style="padding:10px 12px; text-align:center; background-color:{{ health_tint(acct.health_category) }};">
+      {% if acct.renewal_days is not none %}
+      <span style="color:{% if acct.renewal_days <= 30 %}#dc2626{% elif acct.renewal_days <= 90 %}#d97706{% else %}#10b981{% endif %}; font-weight:600;">
+        {{ acct.renewal_days }}d
+      </span>
+      {% else %}
+      <span style="color:#94a3b8;">&mdash;</span>
+      {% endif %}
+    </td>
+  </tr>
+  {% if acct.narrative or acct.gong_summary %}
+  <tr bgcolor="#ffffff" style="background-color:#ffffff;">
+    <td colspan="5" style="padding:12px 14px 18px 14px; border-top:1px solid #e2e8f0; background-color:#ffffff;">
+      {% if acct.narrative %}
+      <p class="card-title" style="margin:0 0 6px;">Weekly summary</p>
+      <p class="card-text" style="font-size:13px; color:#334155; margin:0; line-height:1.65; white-space:pre-wrap;">{{ acct.narrative }}</p>
+      {% endif %}
+      {% if acct.gong_summary %}
+      <div style="margin-top:{% if acct.narrative %}12px{% else %}0{% endif %};">
+        <p class="card-title" style="margin:0 0 6px;">Recent Calls (Gong)</p>
+        <p class="card-text" style="font-size:13px; color:#334155; margin:0; line-height:1.65; white-space:pre-wrap;">{{ acct.gong_summary }}</p>
+      </div>
+      {% endif %}
+    </td>
+  </tr>
+  {% endif %}
+  {% endfor %}
+</table>
+{% endfor %}
+
+{% endblock %}

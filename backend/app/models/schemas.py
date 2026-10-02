@@ -213,6 +213,10 @@ class MetricsSummary(BaseModel):
     usage_decline_count: int
     expansion_signals: int
 
+    # Overdue renewals (past 360 days, still renewing)
+    overdue_arr: float = 0.0
+    overdue_count: int = 0
+
     # Day-over-day deltas (vs yesterday)
     at_risk_delta: Optional[int] = None
     usage_decline_delta: Optional[int] = None
@@ -444,16 +448,29 @@ class PendoPageDaily(BaseModel):
 
 
 class PendoUsageSummary(BaseModel):
-    """Pendo usage summary for current vs previous period."""
-    current_active_visitors: float = 0
-    previous_active_visitors: float = 0
-    visitors_change_pct: float = 0
-    current_minutes: float = 0
-    previous_minutes: float = 0
-    minutes_change_pct: float = 0
-    current_events: float = 0
-    previous_events: float = 0
-    events_change_pct: float = 0
+    """Pendo usage summary — 6 KPIs with current/previous 30-day comparison."""
+    traffic_current: int = 0
+    traffic_previous: int = 0
+    traffic_change_pct: float = 0
+    new_traffic_current: int = 0
+    new_traffic_previous: int = 0
+    new_traffic_change_pct: float = 0
+    sessions_current: int = 0
+    sessions_previous: int = 0
+    sessions_change_pct: float = 0
+    total_minutes_current: float = 0
+    total_minutes_previous: float = 0
+    event_visitors_current: int = 0
+    event_visitors_previous: int = 0
+    avg_session_time_current: float = 0
+    avg_session_time_previous: float = 0
+    avg_session_time_change_pct: float = 0
+    avg_sessions_current: float = 0
+    avg_sessions_previous: float = 0
+    avg_sessions_change_pct: float = 0
+    avg_time_on_app_current: float = 0
+    avg_time_on_app_previous: float = 0
+    avg_time_on_app_change_pct: float = 0
     total_data_days: int = 0
     pendo_account_ids: List[str] = []
 
@@ -969,6 +986,10 @@ class ARRCustomerSummary(BaseModel):
     contract_groups: List[ARRContractGroup] = []
     primary_currency: str = "USD"
     renewal_next_90_days: float = 0.0
+    overdue_arr_eur: float = 0.0
+    earliest_overdue_date: Optional[str] = None
+    max_days_overdue: Optional[int] = None
+    csm: Optional[str] = None
 
 
 class ARRByRevenueType(BaseModel):
@@ -1012,6 +1033,8 @@ class ARRPortfolioSummary(BaseModel):
     total_customers: int = 0
     renewals_next_90_days_arr: float = 0.0
     renewals_next_90_days_count: int = 0
+    overdue_arr_eur: float = 0.0
+    overdue_count: int = 0
     by_revenue_type: List[ARRByRevenueType] = []
     by_region: List[ARRByRegion] = []
     by_industry: List[ARRByIndustry] = []

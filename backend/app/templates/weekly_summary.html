@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+{% from '_email_health_macros.html' import health_badge, health_color, health_tint, health_border %}
+
+{% block title %}Weekly Account Summary — {{ account_name }}{% endblock %}
+
+{% block content %}
+<!-- Title -->
+<p class="content-title">{{ account_name }}</p>
+<p class="content-subtitle">
+  Weekly Account Summary &nbsp;·&nbsp;
+  {{ week_start }} – {{ week_end }}
+</p>
+
+<!-- Health score — left accent border keyed on health status -->
+<div style="margin-bottom:16px; border-left:4px solid {{ health_border(health_category) }}; border-radius:0 6px 6px 0; background-color:{{ health_tint(health_category) }}; overflow:hidden;">
+  <div class="card" style="background-color:{{ health_tint(health_category) }}; border-left:none; border-radius:0 6px 6px 0; margin-bottom:0;">
+    <p class="card-title">Health Score</p>
+    <table width="100%" cellpadding="0" cellspacing="0" role="presentation">
+      <tr>
+        <td style="width:60px; vertical-align:middle;">
+          <span style="font-size:32px; font-weight:800; color:{{ health_color(health_category) }};">
+            {{ health_score }}
+          </span>
+        </td>
+        <td style="vertical-align:middle; padding-left:12px;">
+          {{ health_badge(health_category) }}
+          <div class="score-bar-bg" style="margin-top:8px;">
+            <div class="score-bar-fill score-{% if health_category == 'Good' %}good{% elif health_category == 'At Risk' %}at-risk{% else %}critical{% endif %}"
+                 style="width:{{ health_score }}%;"></div>
+          </div>
+        </td>
+      </tr>
+    </table>
+  </div>
+</div>
+
+<!-- Key metrics row -->
+{% if renewal_days is not none or total_arr %}
+<div class="kpi-row" style="margin-bottom:20px;">
+  {% if total_arr %}
+  <div class="kpi-cell">
+    <div class="kpi-value">${{ "{:,.0f}".format(total_arr) }}</div>
+    <div class="kpi-label">Total ARR</div>
+  </div>
+  {% endif %}
+  {% if renewal_days is not none %}
+  <div class="kpi-cell">
+    <div class="kpi-value"
+         style="color:{% if renewal_days <= 30 %}#ef4444{% elif renewal_days <= 90 %}#f59e0b{% else %}#10b981{% endif %};">
+      {{ renewal_days }}d
+    </div>
+    <div class="kpi-label">To Renewal</div>
+  </div>
+  {% endif %}
+</div>
+{% endif %}
+
+<hr class="section-divider" />
+
+<!-- Weekly narrative -->
+{% if narrative %}
+<div class="card">
+  <p class="card-title">Weekly Summary</p>
+  <p class="card-text">{{ narrative }}</p>
+</div>
+{% endif %}
+
+<!-- Gong summary -->
+{% if gong_summary %}
+<div class="card">
+  <p class="card-title">Recent Calls (Gong)</p>
+  <p class="card-text">{{ gong_summary }}</p>
+</div>
+{% endif %}
+
+{% if not narrative and not gong_summary %}
+<div class="card">
+  <p class="card-text" style="color:#94a3b8; font-style:italic;">
+    No activity summary is available for this account this week.
+  </p>
+</div>
+{% endif %}
+
+<!-- Renewal alert -->
+{% if renewal_days is not none and renewal_days <= 90 %}
+<hr class="section-divider" />
+<div class="card" style="border-color:{% if renewal_days <= 30 %}#fca5a5{% elif renewal_days <= 60 %}#fcd34d{% else %}#93c5fd{% endif %};">
+  <p class="card-title" style="color:{% if renewal_days <= 30 %}#991b1b{% elif renewal_days <= 60 %}#92400e{% else %}#1e40af{% endif %};">
+    Renewal Alert
+  </p>
+  <p class="card-text">
+    {% if renewal_days <= 30 %}
+      &#x26A0;&#xFE0F; <strong>Renewal within 30 days</strong> — Immediate attention required.
+    {% elif renewal_days <= 60 %}
+      &#x23F0; <strong>Renewal within 60 days</strong> — Begin renewal conversations now.
+    {% else %}
+      &#x1F4C5; <strong>Renewal within 90 days</strong> — Schedule a check-in call.
+    {% endif %}
+    {% if nearest_renewal_arr %}
+        ARR at risk: <strong>${{ "{:,.0f}".format(nearest_renewal_arr) }}</strong>
+    {% endif %}
+  </p>
+</div>
+{% endif %}
+
+{% endblock %}
