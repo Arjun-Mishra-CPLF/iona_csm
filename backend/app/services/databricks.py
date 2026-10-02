@@ -197,9 +197,15 @@ FCT_CONTRACTS_TABLE = "silver.silver_layer.fct_contracts"
 #   their SMA term, and year-N lines of multi-year deals are not renewals.
 # - is_churned: only 'Y' counts as churned; 'Expected' is an at-risk renewal that
 #   is still due. Same rules as Finance's renewal overview.
+# - Finance enters these flags by hand, so they are normalised here: the renewal flag
+#   is trimmed/upper-cased, revenue_type is trimmed, and revenue_type_key (trimmed,
+#   lower-cased) is what comparisons use. Only current (is_current) rows are read.
 FCT_CONTRACTS_SOURCE = f"""(
-        SELECT fct_src.* EXCEPT (ACCOUNT_ID),
+        SELECT fct_src.* EXCEPT (ACCOUNT_ID, renewal_not_yet_contracted, revenue_type),
                COALESCE(fct_src.ACCOUNT_ID, name_match.matched_account_id) AS ACCOUNT_ID,
+               UPPER(TRIM(fct_src.renewal_not_yet_contracted)) AS renewal_not_yet_contracted,
+               TRIM(fct_src.revenue_type) AS revenue_type,
+               LOWER(TRIM(fct_src.revenue_type)) AS revenue_type_key,
                COALESCE(TRY_CAST(fct_src.`end` AS DATE), fct_src.rev_rec_end_date) AS contract_end_date,
                COALESCE(UPPER(TRIM(fct_src.churn_expected_occurred)), '') = 'Y' AS is_churned
         FROM {FCT_CONTRACTS_TABLE} fct_src
@@ -211,11 +217,13 @@ FCT_CONTRACTS_SOURCE = f"""(
             HAVING COUNT(DISTINCT account_id) = 1
         ) name_match
           ON fct_src.ACCOUNT_ID IS NULL AND fct_src.account = name_match.account
+        WHERE COALESCE(fct_src.is_current, true)
     )"""
 
 # Revenue types excluded from ARR / renewal KPIs (Finance split 'Services' in the
-# typed migration; 'Services (recurring)' stays included, as before).
-EXCLUDED_REVENUE_TYPES_SQL = "('Services', 'Services - Fixed Fee', 'Services - T+M', 'Perpetual')"
+# typed migration; 'Services (recurring)' stays included, as before). Lower-case:
+# compare against revenue_type_key.
+EXCLUDED_REVENUE_TYPES_SQL = "('services', 'services - fixed fee', 'services - t+m', 'perpetual')"
 
 
 class DatabricksService:
@@ -521,7 +529,7 @@ class DatabricksService:
                     FROM {FCT_TABLE}
                     WHERE account_id = '{safe}'
                       AND RENEWAL_NOT_YET_CONTRACTED = 'Y'
-                      AND revenue_type NOT IN {EXCLUDED_REVENUE_TYPES_SQL}
+                      AND revenue_type_key NOT IN {EXCLUDED_REVENUE_TYPES_SQL}
                       AND NOT is_churned
                       AND contract_end_date > CURRENT_DATE()
                     ORDER BY renewal_days ASC
@@ -2053,7 +2061,7 @@ class DatabricksService:
                         MIN(
                             CASE 
                                 WHEN fct.RENEWAL_NOT_YET_CONTRACTED = 'Y' 
-                                    AND fct.revenue_type NOT IN {EXCLUDED_REVENUE_TYPES_SQL}
+                                    AND fct.revenue_type_key NOT IN {EXCLUDED_REVENUE_TYPES_SQL}
                                     AND NOT fct.is_churned
                                     AND fct.contract_end_date > CURRENT_DATE()
                                 THEN DATEDIFF(fct.contract_end_date, CURRENT_DATE())
@@ -2064,7 +2072,7 @@ class DatabricksService:
                     FROM account_base ab
                     LEFT JOIN {FCT_TABLE} fct ON ab.account_id = fct.account_id
                         AND fct.RENEWAL_NOT_YET_CONTRACTED = 'Y'
-                        AND fct.revenue_type NOT IN {EXCLUDED_REVENUE_TYPES_SQL}
+                        AND fct.revenue_type_key NOT IN {EXCLUDED_REVENUE_TYPES_SQL}
                         AND NOT fct.is_churned
                         AND fct.contract_end_date > CURRENT_DATE()
                     GROUP BY ab.account_id, ab.name, ab.industry, ab.csm_name, ab.parent_id, ab.parent_name, ab.account_executive
@@ -2247,7 +2255,7 @@ class DatabricksService:
                 # Renewal KPI from fct_contracts (EUR, dynamic period)
                 fct_where = f"""
                     c.RENEWAL_NOT_YET_CONTRACTED = 'Y'
-                    AND c.revenue_type NOT IN {EXCLUDED_REVENUE_TYPES_SQL}
+                    AND c.revenue_type_key NOT IN {EXCLUDED_REVENUE_TYPES_SQL}
                     AND NOT c.is_churned
                     AND c.contract_end_date > CURRENT_DATE()
                     AND c.contract_end_date <= DATE_ADD(CURRENT_DATE(), {int(renewal_period)})
@@ -2276,7 +2284,7 @@ class DatabricksService:
                 # Portfolio ARR from fct_contracts (EUR, current calendar year)
                 arr_where = f"""
                     c.RENEWAL_NOT_YET_CONTRACTED = 'Y'
-                    AND c.revenue_type NOT IN {EXCLUDED_REVENUE_TYPES_SQL}
+                    AND c.revenue_type_key NOT IN {EXCLUDED_REVENUE_TYPES_SQL}
                     AND NOT c.is_churned
                     AND c.contract_end_date > CURRENT_DATE()
                     AND YEAR(c.contract_end_date) = YEAR(CURRENT_DATE())
@@ -2956,7 +2964,7 @@ class DatabricksService:
                             c.account_id IN (
                                 SELECT ACCOUNT_ID FROM {FCT_TABLE}
                                 WHERE RENEWAL_NOT_YET_CONTRACTED = 'Y'
-                                  AND revenue_type NOT IN {EXCLUDED_REVENUE_TYPES_SQL}
+                                  AND revenue_type_key NOT IN {EXCLUDED_REVENUE_TYPES_SQL}
                                   AND NOT is_churned
                                   AND contract_end_date > CURRENT_DATE()
                                   AND contract_end_date <= DATE_ADD(CURRENT_DATE(), 90)
@@ -3252,7 +3260,7 @@ class DatabricksService:
                             MIN(DATEDIFF(contract_end_date, CURRENT_DATE())) as renewal_days
                         FROM {FCT_TABLE}
                         WHERE RENEWAL_NOT_YET_CONTRACTED = 'Y'
-                          AND revenue_type NOT IN {EXCLUDED_REVENUE_TYPES_SQL}
+                          AND revenue_type_key NOT IN {EXCLUDED_REVENUE_TYPES_SQL}
                           AND NOT is_churned
                           AND contract_end_date > CURRENT_DATE()
                         GROUP BY account_id
@@ -5835,7 +5843,7 @@ class DatabricksService:
                     INNER JOIN {DIM_CUSTOMERS_TABLE} c ON f.account_id = c.account_id
                     WHERE c._fivetran_deleted = false
                       AND f.RENEWAL_NOT_YET_CONTRACTED = 'Y'
-                      AND f.revenue_type NOT IN {EXCLUDED_REVENUE_TYPES_SQL}
+                      AND f.revenue_type_key NOT IN {EXCLUDED_REVENUE_TYPES_SQL}
                       AND NOT f.is_churned
                       AND f.contract_end_date > CURRENT_DATE()
                 """)
@@ -6593,7 +6601,7 @@ class DatabricksService:
                     INNER JOIN {DIM_CUSTOMERS_TABLE} c ON c.csm_c = u.id AND c._fivetran_deleted = false{acct_filter}
                     LEFT JOIN {FCT_TABLE} f ON c.account_id = f.account_id 
                         AND f.RENEWAL_NOT_YET_CONTRACTED = 'Y'
-                        AND f.revenue_type NOT IN {EXCLUDED_REVENUE_TYPES_SQL}
+                        AND f.revenue_type_key NOT IN {EXCLUDED_REVENUE_TYPES_SQL}
                         AND NOT f.is_churned
                         AND f.contract_end_date > CURRENT_DATE()
                     GROUP BY u.id, u.name, u.email
@@ -6662,7 +6670,7 @@ class DatabricksService:
                         SELECT account_id, SUM(arr_cumulative_eur) as total_arr
                         FROM {FCT_TABLE}
                         WHERE RENEWAL_NOT_YET_CONTRACTED = 'Y'
-                          AND revenue_type NOT IN {EXCLUDED_REVENUE_TYPES_SQL}
+                          AND revenue_type_key NOT IN {EXCLUDED_REVENUE_TYPES_SQL}
                           AND NOT is_churned
                           AND contract_end_date > CURRENT_DATE()
                         GROUP BY account_id
@@ -6670,13 +6678,13 @@ class DatabricksService:
                     LEFT JOIN (
                         SELECT ACCOUNT_ID, MAX(contract_end_date) AS max_end_date
                         FROM {FCT_TABLE}
-                        WHERE RENEWAL_NOT_YET_CONTRACTED = 'Y' AND revenue_type = 'SaaS'
+                        WHERE RENEWAL_NOT_YET_CONTRACTED = 'Y' AND revenue_type_key = 'saas'
                         GROUP BY ACCOUNT_ID
                     ) r_saas ON c.account_id = r_saas.ACCOUNT_ID
                     LEFT JOIN (
                         SELECT ACCOUNT_ID, MAX(contract_end_date) AS max_end_date
                         FROM {FCT_TABLE}
-                        WHERE RENEWAL_NOT_YET_CONTRACTED = 'Y' AND revenue_type = 'eSMA'
+                        WHERE RENEWAL_NOT_YET_CONTRACTED = 'Y' AND revenue_type_key = 'esma'
                         GROUP BY ACCOUNT_ID
                     ) r_esma ON c.account_id = r_esma.ACCOUNT_ID
                     WHERE c._fivetran_deleted = false
@@ -6813,7 +6821,7 @@ class DatabricksService:
             # Common WHERE for all top-section queries (Finance-approved logic)
             base_where = f"""
                 c.RENEWAL_NOT_YET_CONTRACTED = 'Y'
-                AND c.revenue_type NOT IN {EXCLUDED_REVENUE_TYPES_SQL}
+                AND c.revenue_type_key NOT IN {EXCLUDED_REVENUE_TYPES_SQL}
                 AND NOT c.is_churned
                 AND c.contract_end_date > CURRENT_DATE()
                 AND c.contract_end_date <= DATE_ADD(CURRENT_DATE(), {int(renewal_period)})
@@ -6861,7 +6869,7 @@ class DatabricksService:
             logger.info("Fetching revenue type breakdown...")
             revenue_type_query = f"""
                 SELECT
-                    c.revenue_type,
+                    MAX(c.revenue_type) AS revenue_type,
                     COALESCE(ROUND(SUM(c.arr_cumulative_eur), 0), 0) as arr_eur,
                     COALESCE(ROUND(SUM(c.BOOKING_TCV_CAD), 0), 0) as tcv_cad,
                     COUNT(DISTINCT c.CONTRACT_GROUP) as contract_count,
@@ -6870,8 +6878,8 @@ class DatabricksService:
                 LEFT JOIN {DIM_CUSTOMER_TABLE} dc ON c.account_id = dc.account_id
                 WHERE {base_where}
                   AND dc._fivetran_deleted = false
-                  AND c.revenue_type IS NOT NULL AND c.revenue_type != ''
-                GROUP BY c.revenue_type
+                  AND c.revenue_type_key IS NOT NULL AND c.revenue_type_key != ''
+                GROUP BY c.revenue_type_key
                 ORDER BY 2 DESC
             """
             cursor.execute(revenue_type_query)
@@ -6935,7 +6943,7 @@ class DatabricksService:
                 "f.account IS NOT NULL",
                 "f.account != ''",
                 "f.RENEWAL_NOT_YET_CONTRACTED = 'Y'",
-                f"f.revenue_type NOT IN {EXCLUDED_REVENUE_TYPES_SQL}",
+                f"f.revenue_type_key NOT IN {EXCLUDED_REVENUE_TYPES_SQL}",
                 "NOT f.is_churned",
                 "f.contract_end_date > CURRENT_DATE()",
                 f"f.contract_end_date <= DATE_ADD(CURRENT_DATE(), {int(renewal_period)})",
@@ -6943,7 +6951,7 @@ class DatabricksService:
             params = []
             
             if revenue_type:
-                where_conditions.append("f.revenue_type = ?")
+                where_conditions.append("f.revenue_type_key = LOWER(TRIM(?))")
                 params.append(revenue_type)
             if region:
                 where_conditions.append("f.region = ?")
@@ -7029,7 +7037,7 @@ class DatabricksService:
                     FROM {FCT_CONTRACT_TABLE}
                     WHERE account IN ({placeholders})
                     AND renewal_not_yet_contracted = 'Y'
-                    AND revenue_type NOT IN {EXCLUDED_REVENUE_TYPES_SQL}
+                    AND revenue_type_key NOT IN {EXCLUDED_REVENUE_TYPES_SQL}
                     AND NOT is_churned
                     AND contract_end_date > CURRENT_DATE()
                     AND contract_end_date <= DATE_ADD(CURRENT_DATE(), {int(renewal_period)})
