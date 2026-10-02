@@ -15,12 +15,15 @@ from datetime import date
 #   line's rev_rec_end_date (Term Licenses renew with their SMA term;
 #   year-N lines of multi-year deals are not renewals)
 # - is_churned: only 'Y' counts; 'Expected' is an at-risk renewal still due
+# - renewal_not_yet_contracted trimmed/upper-cased (entered by hand in the Finance app)
+# - only current (is_current) rows
 # ═══════════════════════════════════════════════════════════════
 
 spark.sql("""
     CREATE OR REPLACE TEMP VIEW fct_contracts_app AS
-    SELECT fct_src.* EXCEPT (ACCOUNT_ID),
+    SELECT fct_src.* EXCEPT (ACCOUNT_ID, renewal_not_yet_contracted),
            COALESCE(fct_src.ACCOUNT_ID, name_match.matched_account_id) AS ACCOUNT_ID,
+           UPPER(TRIM(fct_src.renewal_not_yet_contracted)) AS renewal_not_yet_contracted,
            COALESCE(TRY_CAST(fct_src.`end` AS DATE), fct_src.rev_rec_end_date) AS contract_end_date,
            COALESCE(UPPER(TRIM(fct_src.churn_expected_occurred)), '') = 'Y' AS is_churned
     FROM silver.silver_layer.fct_contracts fct_src
@@ -32,6 +35,7 @@ spark.sql("""
         HAVING COUNT(DISTINCT account_id) = 1
     ) name_match
       ON fct_src.ACCOUNT_ID IS NULL AND fct_src.account = name_match.account
+    WHERE COALESCE(fct_src.is_current, true)
 """)
 
 # ═══════════════════════════════════════════════════════════════
